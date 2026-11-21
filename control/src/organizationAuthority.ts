@@ -30,6 +30,7 @@ import type {
 } from './organizationContracts';
 import { buildWorkspacePolicy, WORKSPACE_CHARTER_VERSION } from './workspacePolicy';
 import { parseJsonStringArray } from './persistenceCodec';
+import { assertWorkDependenciesCompleted } from './workDependencyGuard';
 type Row = Record<string, string | number | null>;
 
 function required(value: string, label: string): string {
@@ -527,6 +528,9 @@ export class OrganizationAuthority {
       const work = this.getWorkItem(workItemId);
       if (work.status === status) return work;
       if (['completed','cancelled'].includes(work.status)) throw new Error('Terminal work item cannot transition');
+      if (['ready', 'active', 'completed'].includes(status)) {
+        assertWorkDependenciesCompleted(this.database, workItemId);
+      }
       if (status === 'active') {
         if (!work.ownerAgentId) throw new Error('Active work item requires one owner');
         const workspace = this.activeAgentWorkspace(work.ownerAgentId);

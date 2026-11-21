@@ -1,6 +1,7 @@
 import type { ControlDatabase } from './database';
 import type { OrganizationAuthority } from './organizationAuthority';
 import type { WorkAuthority } from './workAuthority';
+import { assertWorkDependenciesCompleted } from './workDependencyGuard';
 
 type WorkDocument = Record<string, unknown>;
 
@@ -33,6 +34,7 @@ export class OrganizationExecutionBridge {
     if (!workItem.ownerAgentId) throw new Error('Executable Organization Work requires one owner Agent');
     if (!['ready','active'].includes(workItem.status)) throw new Error('Organization Work must be ready or active before execution projection');
     if (!['active','blocked'].includes(mission.status)) throw new Error('Organization Mission must be active before execution projection');
+    assertWorkDependenciesCompleted(this.database, workItemId);
 
     const agent = this.organization.getAgent(workItem.ownerAgentId);
     if (agent.status !== 'active') throw new Error('Executable Organization Work owner must be active');
