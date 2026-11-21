@@ -13,6 +13,7 @@ import type {
   WorkRequestStatus,
 } from './workIngressContracts';
 import { assertWorkDependenciesCompleted } from './workDependencyGuard';
+import { assertVerifiedWorkResult } from './verifiedWorkResultGuard';
 
 type Row = Record<string, string | number | null>;
 const REQUESTER_KINDS = new Set<WorkRequesterKind>(['human','external-ai','internal-agent','system']);
@@ -203,6 +204,7 @@ export class WorkIngressAuthority {
       const owner = row.owner_agent_id === null ? undefined : String(row.owner_agent_id);
       const dri = row.dri_agent_id === null ? undefined : String(row.dri_agent_id);
       if (completedBy !== owner && completedBy !== dri) throw new Error('Only the Work owner or Mission DRI may complete the Work item');
+      assertVerifiedWorkResult(this.database, input.workItemId);
       assertWorkDependenciesCompleted(this.database, input.workItemId);
       const producedRefs = strings(input.producedRefs); const decisionRefs = strings(input.decisionRefs); const blockerRefs = strings(input.blockerRefs);
       this.database.db.prepare("UPDATE organization_work_items SET status='completed',updated_at=? WHERE id=?").run(now, input.workItemId);

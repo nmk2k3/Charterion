@@ -48,7 +48,12 @@ describe('WorkIngressAuthority', () => {
     const dep = plane.organization.createDepartment({ organizationId: org.id, name: 'General' }, 11);
     const agent = plane.organization.registerAgent({ organizationId: org.id, displayName: 'Agent A', primaryDepartmentId: dep.id }, 12);
     const request = plane.ingress.submit({ organizationId: org.id, requesterKind: 'human', requesterIdentity: 'human:owner', objective: 'Produce any useful deliverable' }, 20);
-    plane.ingress.accept({ requestId: request.id, acceptedBy: 'human:owner', driAgentId: agent.id }, 30);
+    plane.ingress.accept({
+      requestId: request.id,
+      acceptedBy: 'human:owner',
+      driAgentId: agent.id,
+      completionPolicy: 'structured-result',
+    }, 30);
     const work = plane.ingress.workFor(request.id)[0]!;
     const outcome = plane.ingress.completeWorkItem({ workItemId: work.id, completedBy: agent.id, summary: 'Delivered', producedRefs: ['file:E:/shared/report.pdf','url:https://example.invalid/result'] }, 40);
     expect(outcome).toMatchObject({ summary: 'Delivered', producedRefs: ['file:E:/shared/report.pdf','url:https://example.invalid/result'] });

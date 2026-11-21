@@ -531,6 +531,11 @@ export class OrganizationAuthority {
       if (['ready', 'active', 'completed'].includes(status)) {
         assertWorkDependenciesCompleted(this.database, workItemId);
       }
+      if (status === 'completed') {
+        throw new Error(
+          'WorkItem completion requires a verified WorkOutcome; use org-work.complete',
+        );
+      }
       if (status === 'active') {
         if (!work.ownerAgentId) throw new Error('Active work item requires one owner');
         const workspace = this.activeAgentWorkspace(work.ownerAgentId);
