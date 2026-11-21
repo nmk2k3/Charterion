@@ -287,21 +287,78 @@ export class OrganizationRpcController {
   }
 
   private workComplete(request: RpcRequest, params: Params): unknown {
-    const completedBy = stringParam(params,'completedBy')!;
-    const workItemId = stringParam(params,'workItemId')!;
+    const completedBy = stringParam(params, 'completedBy')!;
+    const workItemId = stringParam(params, 'workItemId')!;
+
     const work = this.plane.organization.getWorkItem(workItemId);
     const mission = this.plane.organization.getMission(work.missionId);
-    if (request.auth?.adminToken) this.auth.requireAdmin(request);
-    else {
-      if (!mission.projectId) throw new Error('Capability completion requires a project-bound Mission');
-      const grant = this.auth.requireCapability(request,'work:complete',{ projectId: mission.projectId });
-      if (grant.subject !== completedBy) throw new Error('Capability subject does not match work completer');
+
+    if (request.auth?.adminToken) {
+      this.auth.requireAdmin(request);
+    } else {
+      if (!mission.projectId) {
+        throw new Error(
+          'Capability completion requires a project-bound Mission',
+        );
+      }
+
+      const grant = this.auth.requireCapability(
+        request,
+        'work:complete',
+        { projectId: mission.projectId },
+      );
+
+      if (grant.subject !== completedBy) {
+        throw new Error(
+          'Capability subject does not match work completer',
+        );
+      }
     }
-    return this.plane.ingress.completeWorkItem({
-      workItemId, completedBy, summary: stringParam(params,'summary')!, producedRefs: stringArray(params,'producedRefs'),
-      decisionRefs: stringArray(params,'decisionRefs'), blockerRefs: stringArray(params,'blockerRefs'),
+
+    // 1. Commit the WorkOutcome first.
+    // An invalid completion must still fail normally.
+    const outcome = this.plane.ingress.completeWorkItem({
+      workItemId,
+      completedBy,
+      summary: stringParam(params, 'summary')!,
+      producedRefs: stringArray(params, 'producedRefs'),
+      decisionRefs: stringArray(params, 'decisionRefs'),
+      blockerRefs: stringArray(params, 'blockerRefs'),
     });
+
+    if (!mission.projectId) {
+      return outcome;
+    }
+
+    // 2. Reconcile after completion is committed.
+    // A reconciliation error must not make the
+    // successful completion appear to have failed.
+    try {
+      const reconciliation =
+        new OrganizationWorkReconciler(this.plane)
+          .reconcile(mission.projectId);
+
+      return {
+        ...outcome,
+        reconciliation: {
+          status: 'ok',
+          ...reconciliation,
+        },
+      };
+    } catch (error) {
+      return {
+        ...outcome,
+        reconciliation: {
+          status: 'failed',
+          error:
+            error instanceof Error
+              ? error.message
+              : String(error),
+        },
+      };
+    }
   }
+
 
   private requestSubmit(request: RpcRequest, params: Params): unknown {
     const projectId = stringParam(params,'projectId',true);
