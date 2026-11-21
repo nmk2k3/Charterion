@@ -5,6 +5,7 @@ import type { WorkPriority, WorkRequesterKind, WorkRequestStatus } from './workI
 import type { RequestOrganizationRuntimeAcquisitionInput } from './organizationRuntimeAcquisitionAuthority';
 import type { AutonomousIntakeInput } from './autonomousIntakeAuthority';
 import type { ReviewDecision } from './reviewPoolContracts';
+import { OrganizationWorkReconciler } from './organizationWorkReconciler';
 
 type Params = Record<string, unknown>;
 export interface OrganizationRpcAuth {
@@ -52,6 +53,7 @@ const METHODS = new Set([
   'work-request.submit','work-request.get','work-request.list','work-request.accept','work-request.reject','work-request.cancel',
   'intake.submit',
   'org-review.list','org-review.claim','org-review.decide',
+  'org-work.reconcile',
 ]);
 
 export class OrganizationRpcController {
@@ -105,6 +107,10 @@ export class OrganizationRpcController {
       case 'org-review.list': return this.reviewList(request, params);
       case 'org-review.claim': return this.reviewClaim(request, params);
       case 'org-review.decide': return this.reviewDecide(request, params);
+      case 'org-work.reconcile':
+        this.auth.requireAdmin(request);
+        return new OrganizationWorkReconciler(this.plane)
+          .reconcile(stringParam(params, 'projectId')!);
       default: throw new Error(`Unknown organization RPC method ${request.method}`);
     }
   }
