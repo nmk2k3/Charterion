@@ -218,7 +218,189 @@ export class ControlPlane {
     if (String(task.project ?? '') !== project.name) throw new Error('Task project does not match ProjectCell name');
     const existing = this.workspaces.find(project.id, taskId);
     if (existing) return existing;
-    const materialized = this.workspaces.materialize({ projectId: project.id, projectRoot: project.rootPath, slotId: slot.id, role: slot.role, taskId });
+    const dependencyIds = task.dependsOn;
+
+    if (
+      !Array.isArray(dependencyIds) ||
+      !dependencyIds.every(
+        (id: unknown) => typeof id === 'string',
+      )
+    ) {
+      throw new Error('Task dependencies are invalid');
+    }
+
+    const verifiedHeads: string[] = [];
+
+    for (const dependencyTaskId of dependencyIds as string[]) {
+      const dependency = this.work.getTask(dependencyTaskId);
+
+      if (!dependency || dependency.projectId !== project.id) {
+        throw new Error(
+          `Dependency ${dependencyTaskId} is missing or belongs to another project`,
+        );
+      }
+
+      // Non-code dependencies do not provide a Git base.
+      if (dependency.completionPolicy !== 'verified-claim') {
+        continue;
+      }
+
+      const completion = dependency.machineCompletion as
+        | VerifiedTaskCompletion
+        | undefined;
+
+      if (
+        completion?.kind !== 'verified-claim' ||
+        !completion.commitSha
+      ) {
+        throw new Error(
+          `Dependency ${dependencyTaskId} has no verified commit`,
+        );
+      }
+
+      const claim = this.evidence.getClaim(completion.claimId);
+      const verification = this.evidence.getVerification(
+        completion.verificationId,
+      );
+
+      if (
+        claim.status !== 'verified' ||
+        verification.status !== 'passed' ||
+        verification.claimId !== claim.id ||
+        claim.taskId !== dependencyTaskId ||
+        claim.projectId !== project.id ||
+        claim.commitSha !== completion.commitSha
+      ) {
+        throw new Error(
+          `Dependency ${dependencyTaskId} verification mismatch`,
+        );
+      }
+
+      verifiedHeads.push(completion.commitSha);
+    }
+
+    const uniqueHeads = [...new Set(verifiedHeads)];
+
+    if (uniqueHeads.length > 1) {
+      throw new Error(
+        'Multiple verified dependency commits require an explicit integration step',
+      );
+    }
+
+    let dependencyBaseSha = uniqueHeads[0];
+
+    const organizationWorkItemId =
+      typeof task.organizationWorkItemId === 'string'
+        ? task.organizationWorkItemId
+        : undefined;
+
+    const retrySeed = organizationWorkItemId
+      ? this.database.db.prepare(`
+          SELECT
+            failed_tester_work_item_id,
+            test_result_id,
+            failure_sha
+          FROM organization_retry_rounds
+          WHERE project_id = ?
+            AND developer_work_item_id = ?
+        `).get(project.id, organizationWorkItemId) as
+          | {
+              failed_tester_work_item_id: string;
+              test_result_id: string;
+              failure_sha: string;
+            }
+          | undefined
+      : undefined;
+
+    if (retrySeed) {
+      const sourceTaskId =
+        `org-work-${retrySeed.failed_tester_work_item_id}`;
+
+      const sourceWorkspace = this.workspaces.find(
+        project.id,
+        sourceTaskId,
+      );
+
+      if (
+        !sourceWorkspace ||
+        sourceWorkspace.status !== 'active'
+      ) {
+        throw new Error(
+          'Retry source workspace is unavailable',
+        );
+      }
+
+      const sourceObservation = this.workspaces.observe(
+        sourceWorkspace.id,
+      );
+
+      if (
+        sourceObservation.dirty ||
+        sourceObservation.headSha !== retrySeed.failure_sha
+      ) {
+        throw new Error(
+          'Retry source workspace has changed since failure',
+        );
+      }
+
+      const event = this.database.db.prepare(`
+        SELECT payload_json
+        FROM events
+        WHERE project_id = ?
+          AND subject = ?
+          AND type = 'ORG_TEST_RUN_RECORDED'
+        ORDER BY seq DESC
+        LIMIT 1
+      `).get(project.id, sourceTaskId) as
+        | { payload_json: string }
+        | undefined;
+
+      if (!event) {
+        throw new Error(
+          'Retry source test evidence is missing',
+        );
+      }
+
+      const result = JSON.parse(event.payload_json) as {
+        id?: string;
+        status?: string;
+        commitSha?: string;
+        workspaceId?: string;
+      };
+
+      if (
+        result.id !== retrySeed.test_result_id ||
+        result.status !== 'failed' ||
+        result.commitSha !== retrySeed.failure_sha ||
+        result.workspaceId !== sourceWorkspace.id
+      ) {
+        throw new Error(
+          'Retry source test evidence does not match',
+        );
+      }
+
+      if (
+        dependencyBaseSha &&
+        dependencyBaseSha !== retrySeed.failure_sha
+      ) {
+        throw new Error(
+          'Retry seed conflicts with dependency base',
+        );
+      }
+
+      dependencyBaseSha = retrySeed.failure_sha;
+    }
+
+    const materialized = this.workspaces.materialize({
+      projectId: project.id,
+      projectRoot: project.rootPath,
+      slotId: slot.id,
+      role: slot.role,
+      taskId,
+      ...(dependencyBaseSha
+        ? { baseSha: dependencyBaseSha }
+        : {}),
+    });
     const resourceId = `task-workspace:${project.id}:${taskId}`;
     let resource: ResourceRecord | undefined;
     let lease: ResourceLease | undefined;

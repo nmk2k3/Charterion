@@ -789,6 +789,40 @@ export class ControlDatabase {
     });
   }
 
+  private migrateV28(): void {
+    this.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS organization_retry_rounds (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL
+            REFERENCES projects(id) ON DELETE CASCADE,
+          mission_id TEXT NOT NULL
+            REFERENCES missions(id) ON DELETE CASCADE,
+          root_tester_work_item_id TEXT NOT NULL
+            REFERENCES organization_work_items(id),
+          failed_tester_work_item_id TEXT NOT NULL UNIQUE
+            REFERENCES organization_work_items(id),
+          test_result_id TEXT NOT NULL,
+          failure_sha TEXT NOT NULL,
+          attempt_no INTEGER NOT NULL
+            CHECK(attempt_no BETWEEN 1 AND 3),
+          developer_work_item_id TEXT NOT NULL UNIQUE
+            REFERENCES organization_work_items(id),
+          tester_work_item_id TEXT NOT NULL UNIQUE
+            REFERENCES organization_work_items(id),
+          created_at INTEGER NOT NULL,
+          UNIQUE(root_tester_work_item_id, attempt_no)
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_org_retry_mission
+          ON organization_retry_rounds(
+            mission_id, attempt_no
+          );
+      `);
+    });
+  }
+
+
   private createConversationContinuityTables(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS agent_conversations (

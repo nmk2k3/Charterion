@@ -6,6 +6,8 @@ import type { RequestOrganizationRuntimeAcquisitionInput } from './organizationR
 import type { AutonomousIntakeInput } from './autonomousIntakeAuthority';
 import type { ReviewDecision } from './reviewPoolContracts';
 import { OrganizationWorkReconciler } from './organizationWorkReconciler';
+import { OrganizationTestRunner } from './organizationTestRunner';
+import { OrganizationRetryController } from './organizationRetryController';
 
 type Params = Record<string, unknown>;
 export interface OrganizationRpcAuth {
@@ -54,6 +56,10 @@ const METHODS = new Set([
   'intake.submit',
   'org-review.list','org-review.claim','org-review.decide',
   'org-work.reconcile',
+  'org-test.run',
+  'org-test.latest',
+  'org-retry.request',
+  'org-retry.list',
 ]);
 
 export class OrganizationRpcController {
@@ -111,6 +117,91 @@ export class OrganizationRpcController {
         this.auth.requireAdmin(request);
         return new OrganizationWorkReconciler(this.plane)
           .reconcile(stringParam(params, 'projectId')!);
+      case 'org-test.run': {
+        this.auth.requireAdmin(request);
+
+        const force = params.force;
+
+        if (force !== undefined && typeof force !== 'boolean') {
+          throw new Error('force must be a boolean');
+        }
+
+        return new OrganizationTestRunner(this.plane).run(
+          stringParam(params, 'projectId')!,
+          stringParam(params, 'workItemId')!,
+          force === true,
+        );
+      }
+      case 'org-test.latest': {
+        this.auth.requireAdmin(request);
+
+        return new OrganizationTestRunner(this.plane).latest(
+          stringParam(params, 'projectId')!,
+          stringParam(params, 'workItemId')!,
+        );
+      }
+      case 'org-retry.request': {
+        this.auth.requireAdmin(request);
+
+        const projectId = stringParam(
+          params, 'projectId',
+        )!;
+
+        const result = new OrganizationRetryController(
+          this.plane,
+        ).request({
+          projectId,
+          failedTesterWorkItemId: stringParam(
+            params, 'failedTesterWorkItemId',
+          )!,
+          developerAgentId: stringParam(
+            params, 'developerAgentId',
+          )!,
+        });
+
+        if (result.action !== 'created') {
+          return result;
+        }
+
+        try {
+          const reconciliation =
+            new OrganizationWorkReconciler(
+              this.plane,
+            ).reconcile(projectId);
+
+          return {
+            ...result,
+            reconciliation: {
+              status: 'ok',
+              ...reconciliation,
+            },
+          };
+        } catch (error) {
+          // Retry state has already been committed.
+          // Report reconciliation failure separately.
+          return {
+            ...result,
+            reconciliation: {
+              status: 'failed',
+              error:
+                error instanceof Error
+                  ? error.message
+                  : String(error),
+            },
+          };
+        }
+      }
+
+      case 'org-retry.list': {
+        this.auth.requireAdmin(request);
+
+        return new OrganizationRetryController(
+          this.plane,
+        ).list(
+          stringParam(params, 'missionId')!,
+        );
+      }
+
       default: throw new Error(`Unknown organization RPC method ${request.method}`);
     }
   }
