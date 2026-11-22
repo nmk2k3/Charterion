@@ -42,6 +42,16 @@ $env:GAM_DISABLE_AUTONOMY = '0'
 # Optional: only for a trusted repository whose tests you are willing to run
 # under your local Windows user. This executes project-controlled Node code.
 $env:GAM_ALLOW_AGENT_TEST_RUNS = '1'
+
+# Optional: permit a bounded, exact-SHA code patch returned by ChatGPT Web
+$env:GAM_ALLOW_WEB_PATCHES = '1'
+
+# Optional: permit independent AI Reviewer decisions on the exact Git diff
+$env:GAM_ALLOW_WEB_REVIEWS = '1'
+
+# Keep promotion disabled until the isolated pilot succeeds and you
+# explicitly approve unattended updates to the target Git branch.
+$env:GAM_ALLOW_WEB_PROMOTIONS = '0'
 ```
 
 With the test-execution switch unset, only an authenticated admin can call
@@ -62,11 +72,24 @@ The daemon runs autonomy convergence every 15 seconds by default;
 
 ## Limits and safety boundaries
 
-- The browser extension can send and observe ChatGPT Web prompts/replies. **A
-  normal ChatGPT Web conversation does not by itself have filesystem or terminal
-  access.** The Worker must have a real, operator-approved way to write its
-  worktree and invoke the scoped CLI for the system to produce code commits.
-  This implementation does not invent such authority from model prose.
+- ChatGPT Web itself has no terminal or filesystem access. The extension
+  has an optional, restricted native Web Patch adapter: a model reply must
+  contain a strict `<<<CHARTERION_PATCH_V1>>>` JSON block with the exact
+  task, AgentSlot and current HEAD SHA. With `GAM_ALLOW_WEB_PATCHES=1`,
+  the native Kernel validates the durable reply-observed attempt and browser
+  identity, restricts paths and total size, commits actual worktree changes
+  and records a verified WorkOutcome. Missing rights, malformed replies and
+  failed test execution are **not** treated as success.
+- Reviewer tabs receive a read-only Git diff and use an independent
+  `<<<CHARTERION_REVIEW_V1>>>` verdict plus a typed terminal
+  `<GAM_RESULT>`. The Kernel accepts AI Reviewer decisions only with
+  `GAM_ALLOW_WEB_REVIEWS=1`, matching reviewer slot, tab, attempt and SHA.
+  A truncated diff cannot authorize approval. Git promotion still needs
+  `GAM_ALLOW_WEB_PROMOTIONS=1` or a separate authenticated admin action.
+- Web patching is intended for small, trusted, controlled pilots. It is
+  **not** a general shell, package manager or complete source-code IDE.
+  Model-generated file replacements are bounded to eight files and 10,000
+  characters. It is not safe to expose this opt-in to untrusted projects.
 - Tests execute checked-in Node code locally. They are **not** a complete OS
   sandbox. Enable agent-initiated tests only for trusted projects and accounts.
 - A general multi-branch merge candidate may differ from the exact verified
