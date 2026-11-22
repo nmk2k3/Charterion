@@ -32,7 +32,7 @@ describe('strict ChatGPT Web patch response parser', () => {
   it('rejects ambiguous, trailing or fenced model outputs', () => {
     expect(parseWebPatchReply(reply() + '\nExtra payload', expected).kind).toBe('invalid');
     expect(parseWebPatchReply(reply() + '\n' + reply(), expected).kind).toBe('invalid');
-    expect(parseWebPatchReply(`${WEB_PATCH_OPEN}\n```json\n{}\n```\n${WEB_PATCH_CLOSE}`, expected).kind).toBe('invalid');
+    expect(parseWebPatchReply(WEB_PATCH_OPEN + '\n' + '```json\n{}\n```' + '\n' + WEB_PATCH_CLOSE, expected).kind).toBe('invalid');
   });
   it('rejects symlink traversal-like paths and duplicate paths', () => {
     expect(parseWebPatchReply(reply([{ path: '../secrets.txt', content: 'x' }]), expected).kind).toBe('invalid');
