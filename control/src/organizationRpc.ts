@@ -501,32 +501,35 @@ export class OrganizationRpcController {
       const owner = work.ownerAgentId
         ? this.plane.organization.getAgent(work.ownerAgentId)
         : undefined;
-      if (!owner || owner.status !== 'active') {
-        throw new Error('Work completion requires an active assigned owner');
-      }
-      if (owner.runtimeSlotId) {
+      const dri = mission.driAgentId
+        ? this.plane.organization.getAgent(mission.driAgentId)
+        : undefined;
+      if (owner?.runtimeSlotId) {
         // Executable Organization Work requires the exact provisioned
         // AgentSlot/worktree capability. A broad agent capability cannot
         // bypass verified-claim authority or impersonate another Worker.
-        if (grant.taskId !== `org-work-${workItemId}` ||
+        if (owner.status !== 'active' ||
+            grant.taskId !== `org-work-${workItemId}` ||
             grant.agentSlotId !== owner.runtimeSlotId ||
             grant.subject !== owner.runtimeSlotId ||
             (completedBy !== owner.id && completedBy !== owner.runtimeSlotId)) {
           throw new Error('Work completion capability is not bound to this WorkItem owner');
         }
+        completedBy = owner.id;
       } else {
-        // External/direct-tool work may have no browser runtime. Preserve
-        // the historical owner-scoped completion path for structured
-        // outcomes only; never admit it for verified Git claims.
+        // Preserve non-browser structured-result completion for the WorkItem
+        // owner or Mission DRI. Keep it impossible to complete verified-claim
+        // tasks or runtime-bound reviewers using an ordinary identity token.
+        const actorAuthorized = (owner?.id === grant.subject && owner.status === 'active') ||
+          (dri?.id === grant.subject && dri.status === 'active');
         if (work.completionPolicy !== 'structured-result' ||
-            grant.subject !== owner.id ||
+            !actorAuthorized ||
             grant.agentSlotId !== undefined ||
             grant.taskId !== undefined ||
-            completedBy !== owner.id) {
-          throw new Error('Direct-tool work completion requires an owner-scoped structured-result capability');
+            completedBy !== grant.subject) {
+          throw new Error('Direct-tool completion requires an authorized owner or Mission DRI capability');
         }
       }
-      completedBy = owner.id;
     }
 
     // 1. Commit the WorkOutcome first.
