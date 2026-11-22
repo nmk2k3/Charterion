@@ -115,7 +115,9 @@ describe('cross-epoch acknowledged Organization reply recovery', () => {
     observed.state.pendingAttempt = {
       attemptId: record.attemptId, contentEpoch: record.contentEpoch,
       baselineAssistantMessageCount: record.baselineAssistantMessageCount,
-      baselineAssistantMessageId: record.baselineAssistantMessageId,
+      ...(record.baselineAssistantMessageId
+        ? { baselineAssistantMessageId: record.baselineAssistantMessageId }
+        : {}),
       startedAt: 1500,
     };
     return { record, evidence: observed };
