@@ -46,7 +46,7 @@ export async function completeOrganizationWebPatch(
   try {
     const snapshot = await readNativeControlSnapshot();
     const slot = snapshot.agents.find((candidate) => candidate.id === slotId);
-    if (!slot || slot.browserTabId !== tabId || slot.projectId !== task.projectId ||
+    if (!slot || slot.browserTabId !== tabId || slot.projectId !== (task as AgentTask & { projectId?: unknown }).projectId ||
         slot.role !== task.targetRole || slot.browserQuarantined ||
         slot.desiredState !== 'active' || slot.browserState !== 'open') {
       throw new Error('Web patch reply does not match the active browser AgentSlot');
