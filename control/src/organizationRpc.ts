@@ -9,6 +9,7 @@ import { OrganizationWorkReconciler } from './organizationWorkReconciler';
 import { OrganizationTestRunner } from './organizationTestRunner';
 import { OrganizationRetryController } from './organizationRetryController';
 import { OrganizationReviewRelease } from './organizationReviewRelease';
+import { OrganizationAutonomyScheduler } from './organizationAutonomyScheduler';
 
 type Params = Record<string, unknown>;
 export interface OrganizationRpcAuth {
@@ -62,6 +63,7 @@ const METHODS = new Set([
   'org-retry.request',
   'org-retry.list',
   'org-review.release',
+  'org-autonomy.tick',
 ]);
 
 export class OrganizationRpcController {
@@ -194,6 +196,11 @@ export class OrganizationRpcController {
         }
       }
 
+      case 'org-autonomy.tick': {
+        this.auth.requireAdmin(request);
+        return new OrganizationAutonomyScheduler(this.plane)
+          .tick(stringParam(params, 'projectId')!);
+      }
       case 'org-review.release': {
         this.auth.requireAdmin(request);
         return new OrganizationReviewRelease(this.plane)
