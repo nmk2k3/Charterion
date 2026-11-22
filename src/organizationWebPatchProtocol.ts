@@ -1,5 +1,18 @@
+// Retain V1 for already-durable replies. V2 uses renderer-safe text markers,
+// avoiding angle-bracket tokens that may be treated as UI markup.
 export const WEB_PATCH_OPEN = '<<<CHARTERION_PATCH_V1>>>';
 export const WEB_PATCH_CLOSE = '<<<END_CHARTERION_PATCH_V1>>>';
+export const WEB_PATCH_V2_OPEN = 'CHARTERION_PATCH_V2_BEGIN';
+export const WEB_PATCH_V2_CLOSE = 'CHARTERION_PATCH_V2_END';
+
+const PATCH_FORMATS = [
+  { open: WEB_PATCH_OPEN, close: WEB_PATCH_CLOSE },
+  { open: WEB_PATCH_V2_OPEN, close: WEB_PATCH_V2_CLOSE },
+] as const;
+
+export function hasWebPatchMarkers(text: string): boolean {
+  return PATCH_FORMATS.some(({ open, close }) => text.includes(open) || text.includes(close));
+}
 export const MAX_WEB_PATCH_REPLY_CHARS = 11_500;
 export const MAX_WEB_PATCH_FILE_CHARS = 10_000;
 
@@ -24,21 +37,22 @@ export function parseWebPatchReply(
   text: string,
   expected: { taskId: string; slotId: string; baseSha: string },
 ): WebPatchParseResult {
-  if (!text.includes(WEB_PATCH_OPEN) && !text.includes(WEB_PATCH_CLOSE)) {
-    return { kind: 'absent' };
-  }
+  if (!hasWebPatchMarkers(text)) return { kind: 'absent' };
   const invalid = (reason: string): WebPatchParseResult => ({ kind: 'invalid', reason });
   if (text.length > MAX_WEB_PATCH_REPLY_CHARS) return invalid('Web patch reply exceeds maximum size');
 
-  const start = text.lastIndexOf(WEB_PATCH_OPEN);
-  const close = text.lastIndexOf(WEB_PATCH_CLOSE);
-  if (start < 0 || close < 0 || close < start ||
-      text.indexOf(WEB_PATCH_OPEN) !== start ||
-      text.indexOf(WEB_PATCH_CLOSE) !== close ||
-      text.slice(close + WEB_PATCH_CLOSE.length).trim() !== '') {
+  const active = PATCH_FORMATS.filter(({ open, close }) => text.includes(open) || text.includes(close));
+  if (active.length !== 1) return invalid('Web patch mixes different protocol versions');
+  const { open, close } = active[0]!;
+  const start = text.indexOf(open);
+  const end = text.indexOf(close);
+  if (start < 0 || end < 0 || end < start ||
+      text.indexOf(open, start + open.length) !== -1 ||
+      text.indexOf(close, end + close.length) !== -1 ||
+      text.slice(end + close.length).trim() !== '') {
     return invalid('Web patch requires one unambiguous terminal marker pair');
   }
-  const raw = text.slice(start + WEB_PATCH_OPEN.length, close).trim();
+  const raw = text.slice(start + open.length, end).trim();
   if (raw.startsWith('```') || raw.length > MAX_WEB_PATCH_REPLY_CHARS - 100) {
     return invalid('Web patch JSON must not use Markdown code fences');
   }
