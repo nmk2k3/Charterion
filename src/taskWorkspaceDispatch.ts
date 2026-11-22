@@ -1,6 +1,7 @@
 import type { AgentTask, ManagedTab } from './contracts';
 import { provisionNativeTaskWorkspace, previewNativeOrganizationWebPatch, previewNativeOrganizationWebReview, type NativeControlSnapshot, type NativeOrganizationReviewPreview } from './nativeControl';
 import type { TaskWorkspacePromptContext } from './taskPrompt';
+import { reportIncident } from './browserRuntimeReporting';
 
 export async function provisionTaskWorkspaceForDispatch(
   task: AgentTask,
@@ -24,13 +25,23 @@ export async function provisionTaskWorkspaceForDispatch(
     const preview = await previewNativeOrganizationWebPatch({
       projectId: agent.projectId, taskId: task.id, slotId, tabId,
     });
+    if (!preview.patchEnabled) {
+      await reportIncident('organization-web-patch-disabled', task.id, {
+        tabId, slotId, reason: 'Kernel preview reports GAM_ALLOW_WEB_PATCHES disabled',
+      }, 'warning');
+    }
     return {
       ...workspace,
       patchEnabled: preview.patchEnabled,
       previewHeadSha: preview.headSha,
       sourceFiles: preview.files,
     };
-  } catch {
+  } catch (error) {
+    await reportIncident('organization-web-patch-preview-unavailable', task.id, {
+      tabId, slotId, error: error instanceof Error ? error.message : String(error),
+    }, 'warning');
+    // Preserve explicit manual-CLI fallback for installations that opt out
+    // of native Web Patch. It must never be represented as patch capability.
     return workspace;
   }
 }
