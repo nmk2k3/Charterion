@@ -2,6 +2,7 @@ import { mapWithConcurrency } from './asyncPool';
 import { retainAttemptLedger } from './attemptLedger';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
 import { markReplyObserved, persistAttempt, readWorkState, replaceWorkState, serializeStateMutation, transitionAttempt, workState, type WorkState } from './backgroundWorkState';
+import { acknowledgeObservedReply } from './acknowledgedReplyRecovery';
 import { processObservedOrganizationWebReply, recoverOrganizationWebReplies } from './organizationWebReplyLifecycle';
 import { dispatchReadyManagedTasks } from './taskDispatchRuntime';
 import { hasOrganizationExecutionTask, markOrganizationExecutionObserved } from './organizationWorkAutomation';
@@ -716,8 +717,8 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
     void reportSlotRuntime(tabId, message.observation, message.snapshot, bindingFor)
       .then(async (binding) => {
         await reconcileGenerationReservation(tabId, binding, message.snapshot);
-        const persisted = await markReplyObserved(
-          message.attemptId, message.observation.contentEpoch, message.snapshot, tabId,
+        const persisted = await acknowledgeObservedReply(
+          message.attemptId, tabId, message.observation.contentEpoch, message.snapshot,
         );
         if (persisted) await completeConversationRolloverForReply(binding, message.attemptId);
         return { persisted, binding };
