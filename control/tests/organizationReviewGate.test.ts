@@ -481,9 +481,17 @@ describe('Organization Reviewer Gate', () => {
       expect(allowed.status).toBe('open');
       expect(allowed.headSha).toBe(testSha);
 
+      // Tester WorkOutcome already opened the durable Review Pool with two
+      // required dimensions. Re-opening must reuse it, not replace the slot
+      // policy requested by the Organization workflow.
+      const slots = plane.reviewPool.listSlots(allowed.id);
+      expect(slots).toHaveLength(2);
+      expect(slots.every((slot) => slot.required)).toBe(true);
       expect(
-        plane.reviewPool.listSlots(allowed.id),
-      ).toHaveLength(1);
+        db!.db.prepare(
+          'SELECT COUNT(*) AS count FROM review_requests WHERE change_request_id=?',
+        ).get(testChange.id),
+      ).toMatchObject({ count: 1 });
 
       expect(
         plane.organization.getWorkItem(
