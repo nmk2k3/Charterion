@@ -49,10 +49,14 @@ function readPendingPrompt(): PendingPromptEvidence | undefined {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
     const item = parsed as Record<string, unknown>;
     if (typeof item.attemptId !== 'string' || typeof item.baselineAssistantMessageCount !== 'number') return undefined;
-    if (typeof item.contentEpoch !== 'string' || item.contentEpoch !== contentEpoch) return undefined;
+    // Keep a pending delivery from the previous content-script generation:
+    // extension reloads replace contentEpoch but preserve tab sessionStorage.
+    // Cross-generation replies require a separate, strict background check
+    // against the durable attempt and this page's delivery ledger.
+    if (typeof item.contentEpoch !== 'string' || !item.contentEpoch) return undefined;
     const pending: PendingPromptEvidence = {
       attemptId: item.attemptId,
-      contentEpoch,
+      contentEpoch: item.contentEpoch,
       baselineAssistantMessageCount: item.baselineAssistantMessageCount,
       startedAt: typeof item.startedAt === 'number' ? item.startedAt : 0,
     };
@@ -196,7 +200,9 @@ observer.observe(document.documentElement, {
   childList: true,
   subtree: true,
   attributes: true,
-  attributeFilter: ['disabled', 'aria-disabled', 'aria-busy'],
+  // Some ChatGPT app-shell variants mount the editor before annotating its
+  // composer role/attributes. Re-evaluate readiness when those arrive.
+  attributeFilter: ['disabled', 'aria-disabled', 'aria-busy', 'contenteditable', 'role', 'data-chatgpt-composer', 'data-composer-input', 'data-composer-markdown'],
 });
 window.addEventListener('popstate', schedulePublish);
 window.addEventListener('hashchange', schedulePublish);

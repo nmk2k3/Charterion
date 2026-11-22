@@ -253,3 +253,62 @@ export function assertOrganizationReviewReady(
     deny('Tester claim verification is not passed');
   }
 }
+
+/**
+ * Promotion must not be used as a bypass around the Review Pool.
+ * Applies only to Organization task claims; legacy standalone promotions
+ * retain their existing independent approval policy.
+ */
+export function assertOrganizationPromotionReady(
+  database: ControlDatabase,
+  claimId: string,
+  projectId: string,
+  headSha: string,
+): void {
+  const db = database.db;
+  const claim = db.prepare(
+    'SELECT task_id,project_id,commit_sha FROM claims WHERE id=?',
+  ).get(claimId) as { task_id: string; project_id: string; commit_sha: string | null } | undefined;
+  if (!claim) deny('Promotion claim is missing');
+  if (!claim.task_id.startsWith('org-work-')) return;
+  if (claim.project_id !== projectId || claim.commit_sha?.toLowerCase() !== headSha.toLowerCase()) {
+    deny('Promotion project or commit does not match source claim');
+  }
+
+  assertOrganizationReviewReady(database, claim.task_id, claimId, headSha);
+
+  const change = db.prepare(`
+    SELECT id,revision,status FROM change_requests
+    WHERE project_id=? AND task_id=? AND claim_id=? AND lower(head_sha)=lower(?)
+      AND status IN ('approved','queued','integrated')
+    ORDER BY updated_at DESC,id DESC LIMIT 1
+  `).get(projectId, claim.task_id, claimId, headSha) as
+    { id: string; revision: number; status: string } | undefined;
+  if (!change) deny('Promotion requires an approved exact-head Change Request');
+
+  const request = db.prepare(`
+    SELECT id FROM review_requests
+    WHERE project_id=? AND change_request_id=? AND revision=?
+      AND lower(head_sha)=lower(?) AND status='approved'
+  `).get(projectId, change.id, change.revision, headSha) as { id: string } | undefined;
+  if (!request) deny('Promotion requires an approved Review Pool request');
+
+  const incomplete = db.prepare(`
+    SELECT count(*) AS count FROM review_slots
+    WHERE review_request_id=? AND required=1 AND state<>'approved'
+  `).get(request.id) as { count: number };
+  const required = db.prepare(`
+    SELECT count(*) AS count FROM review_slots
+    WHERE review_request_id=? AND required=1
+  `).get(request.id) as { count: number };
+  if (required.count === 0 || incomplete.count !== 0) {
+    deny('Promotion requires all mandatory Review Pool approvals');
+  }
+
+  const supervisor = db.prepare(`
+    SELECT id FROM supervisor_reviews
+    WHERE change_request_id=? AND verdict='approve' AND lower(head_sha)=lower(?)
+    ORDER BY created_at DESC,id DESC LIMIT 1
+  `).get(change.id, headSha) as { id: string } | undefined;
+  if (!supervisor) deny('Promotion requires independent Supervisor approval');
+}

@@ -51,6 +51,20 @@ describe('organization and external work ingress RPC', () => {
     const workItemId = workItem.id;
     expect(workItem.completionPolicy).toBe('structured-result');
 
+    // A similarly scoped token from the external requester is not an
+    // Organization WorkItem owner capability.
+    const impersonator = h.plane.issueCapability({
+      subject: 'external-ai:planner',
+      projectId: project.id,
+      scopes: ['work:complete'],
+      ttlMs: 60_000,
+    });
+    const rejected = h.router.handle({ id: 'impersonate', method: 'org-work.complete', auth: { capabilityToken: impersonator.token }, params: {
+      workItemId, completedBy: agent.id, summary: 'Forged completion',
+    } });
+    expect(rejected.ok).toBe(false);
+    expect(h.plane.ingress.getOutcome(workItemId)).toBeUndefined();
+
     const worker = h.plane.issueCapability({ subject: agent.id, projectId: project.id, scopes: ['work:complete'], ttlMs: 60_000 });
     const completed = h.router.handle({ id: 'complete', method: 'org-work.complete', auth: { capabilityToken: worker.token }, params: {
       workItemId, completedBy: agent.id, summary: 'Finished with direct tools', producedRefs: ['file:E:/shared/report.pdf'],
@@ -62,6 +76,49 @@ describe('organization and external work ingress RPC', () => {
   });
 });
 
+
+describe('Organization browser workspace profile binding', () => {
+  it('exposes distinct Kernel-owned per-Agent profile IDs without allowing a shared physical profile to impersonate them', () => {
+    const h = harness();
+    const project = h.plane.createProject({ name: 'Two Agent Pilot', rootPath: 'C:/pilot', maxSlots: 8 });
+    const organization = h.plane.organization.createOrganization({ name: 'Pilot Org' });
+    const configured = [
+      { role: 'Developer', tabId: 101 },
+      { role: 'Tester', tabId: 102 },
+    ].map(({ role, tabId }) => {
+      const agent = h.plane.organization.registerAgent({
+        organizationId: organization.id, displayName: role,
+      });
+      const workspace = h.plane.organization.activeAgentWorkspace(agent.id)!;
+      const profileId = `browser-${agent.id}`;
+      h.plane.organization.configureAgentWorkspace({
+        workspaceId: workspace.id, rootRef: project.rootPath,
+        browserProfileId: profileId, toolProfileRef: `tools-${agent.id}`,
+      });
+      const acquisition = h.plane.organizationRuntime.requestAndAcquire({
+        organizationId: organization.id, agentId: agent.id, projectId: project.id,
+        role, idempotencyKey: `pilot-${role}`,
+      });
+      return { slotId: acquisition.runtimeSlotId!, profileId, tabId };
+    });
+    const response = h.router.handle({
+      id: 'snapshot', method: 'control.snapshot', auth: { adminToken: 'admin' },
+    });
+    expect(response.ok).toBe(true);
+    if (!response.ok) return;
+    const agents = (response.result as { agents: Array<{ id: string; workspaceBrowserProfileId?: string }> }).agents;
+    expect(configured[0]!.profileId).not.toBe(configured[1]!.profileId);
+    for (const { slotId, profileId, tabId } of configured) {
+      expect(agents.find((slot) => slot.id === slotId)?.workspaceBrowserProfileId).toBe(profileId);
+      expect(() => h.plane.reportAgentBrowser({
+        slotId, profileId: 'gam-default', browserState: 'opening', tabId,
+      })).toThrow(/Browser profile does not match/);
+      expect(h.plane.reportAgentBrowser({
+        slotId, profileId, browserState: 'opening', tabId,
+      })).toMatchObject({ id: slotId, browserProfileId: profileId });
+    }
+  });
+});
 
 describe('Agent workspace RPC authority', () => {
   it('keeps workspace policy configuration admin-controlled and exposes the compiled charter', () => {

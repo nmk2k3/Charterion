@@ -346,3 +346,153 @@ export async function reportNativeIncident(input: {
 }): Promise<void> {
   await persistentNativeResult('incident.report', input as unknown as Record<string, unknown>);
 }
+
+
+export interface NativeOrganizationWebPatchPreview {
+  headSha: string;
+  patchEnabled: boolean;
+  files: Array<{ path: string; content: string }>;
+}
+
+export interface NativeOrganizationWebPatchInput {
+  projectId: string;
+  taskId: string;
+  slotId: string;
+  tabId: number;
+  attemptId: string;
+  baseSha: string;
+  summary: string;
+  files: Array<{ path: string; content: string }>;
+}
+
+export interface NativeOrganizationWebPatchResult {
+  projectId: string;
+  taskId: string;
+  attemptId: string;
+  status: 'completed' | 'test-failed';
+  commitSha: string;
+  claimId?: string;
+  testResultId?: string;
+  requestHash?: string;
+}
+
+export async function previewNativeOrganizationWebPatch(input: {
+  projectId: string; taskId: string; slotId: string; tabId: number;
+}): Promise<NativeOrganizationWebPatchPreview> {
+  const value = record(await persistentNativeResult('org-web-patch.preview', input), 'web patch preview');
+  if (typeof value.patchEnabled !== 'boolean') {
+    throw new Error('web patch preview.patchEnabled must be a boolean');
+  }
+  const files = arrayField(value.files, 'web patch preview.files').map((item, index) => {
+    const file = record(item, `web patch preview.files[${index}]`);
+    return {
+      path: stringField(file.path, 'web patch preview file path'),
+      content: stringField(file.content, 'web patch preview file content'),
+    };
+  });
+  return {
+    headSha: stringField(value.headSha, 'web patch preview.headSha'),
+    patchEnabled: value.patchEnabled,
+    files,
+  };
+}
+
+export async function applyNativeOrganizationWebPatch(
+  input: NativeOrganizationWebPatchInput,
+): Promise<NativeOrganizationWebPatchResult> {
+  const value = record(await persistentNativeResult(
+    'org-web-patch.apply', input as unknown as Record<string, unknown>,
+  ), 'web patch result');
+  const status = enumField(value.status, 'web patch result.status',
+    new Set(['completed', 'test-failed']));
+  const result: NativeOrganizationWebPatchResult = {
+    projectId: stringField(value.projectId, 'web patch result.projectId'),
+    taskId: stringField(value.taskId, 'web patch result.taskId'),
+    attemptId: stringField(value.attemptId, 'web patch result.attemptId'),
+    status: status as NativeOrganizationWebPatchResult['status'],
+    commitSha: stringField(value.commitSha, 'web patch result.commitSha'),
+  };
+  if (value.claimId !== undefined) result.claimId = stringField(value.claimId, 'web patch result.claimId');
+  if (value.testResultId !== undefined) result.testResultId = stringField(value.testResultId, 'web patch result.testResultId');
+  if (value.requestHash !== undefined) result.requestHash = stringField(value.requestHash, 'web patch result.requestHash');
+  return result;
+}
+
+export interface NativeOrganizationReviewPreview {
+  taskId: string;
+  slotId: string;
+  reviewSlotId: string;
+  reviewRequestId: string;
+  headSha: string;
+  diff: string;
+  diffComplete: boolean;
+  reviewEnabled: boolean;
+  promotionEnabled: boolean;
+}
+export interface NativeOrganizationReviewDecisionInput {
+  projectId: string;
+  taskId: string;
+  slotId: string;
+  tabId: number;
+  attemptId: string;
+  reviewSlotId: string;
+  headSha: string;
+  decision: 'approve' | 'request-changes' | 'reject';
+  note: string;
+}
+export interface NativeOrganizationReviewDecisionResult {
+  projectId: string;
+  taskId: string;
+  attemptId: string;
+  reviewSlotId: string;
+  decision: 'approve' | 'request-changes' | 'reject';
+  headSha: string;
+  status: 'decided' | 'approved-awaiting-promotion' | 'promoted' | 'promotion-blocked';
+  requestHash: string;
+  reason?: string;
+}
+
+export async function previewNativeOrganizationWebReview(input: {
+  projectId: string; taskId: string; slotId: string; tabId: number;
+}): Promise<NativeOrganizationReviewPreview> {
+  const raw = record(await persistentNativeResult('org-web-review.preview', input), 'web review preview');
+  if (typeof raw.diffComplete !== 'boolean' || typeof raw.reviewEnabled !== 'boolean' ||
+      typeof raw.promotionEnabled !== 'boolean') {
+    throw new Error('Web review preview flags are invalid');
+  }
+  return {
+    taskId: stringField(raw.taskId, 'web review taskId'),
+    slotId: stringField(raw.slotId, 'web review slotId'),
+    reviewSlotId: stringField(raw.reviewSlotId, 'web review reviewSlotId'),
+    reviewRequestId: stringField(raw.reviewRequestId, 'web review reviewRequestId'),
+    headSha: stringField(raw.headSha, 'web review headSha'),
+    diff: stringField(raw.diff, 'web review diff'),
+    diffComplete: raw.diffComplete,
+    reviewEnabled: raw.reviewEnabled,
+    promotionEnabled: raw.promotionEnabled,
+  };
+}
+
+export async function decideNativeOrganizationWebReview(
+  input: NativeOrganizationReviewDecisionInput,
+): Promise<NativeOrganizationReviewDecisionResult> {
+  const raw = record(await persistentNativeResult(
+    'org-web-review.decide', input as unknown as Record<string, unknown>,
+  ), 'web review decision');
+  const decision = enumField(raw.decision, 'web review decision',
+    new Set(['approve','request-changes','reject']));
+  const status = enumField(raw.status, 'web review status',
+    new Set(['decided','approved-awaiting-promotion','promoted','promotion-blocked']));
+  const result: NativeOrganizationReviewDecisionResult = {
+    projectId: stringField(raw.projectId, 'web review projectId'),
+    taskId: stringField(raw.taskId, 'web review taskId'),
+    attemptId: stringField(raw.attemptId, 'web review attemptId'),
+    reviewSlotId: stringField(raw.reviewSlotId, 'web review reviewSlotId'),
+    headSha: stringField(raw.headSha, 'web review headSha'),
+    decision: decision as NativeOrganizationReviewDecisionResult['decision'],
+    status: status as NativeOrganizationReviewDecisionResult['status'],
+    requestHash: stringField(raw.requestHash, 'web review requestHash'),
+  };
+  if (raw.reason !== undefined) result.reason = stringField(raw.reason, 'web review reason');
+  return result;
+}

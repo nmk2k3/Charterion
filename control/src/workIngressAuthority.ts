@@ -206,15 +206,35 @@ export class WorkIngressAuthority {
       const dri = row.dri_agent_id === null ? undefined : String(row.dri_agent_id);
       if (completedBy !== owner && completedBy !== dri) throw new Error('Only the Work owner or Mission DRI may complete the Work item');
       assertWorkDependenciesCompleted(this.database, input.workItemId);
-      assertVerifiedWorkResult(this.database, input.workItemId);
+      // Report the concrete latest Tester result first; the independent
+      // verified-claim guard still applies before writing any WorkOutcome.
       assertPassedTesterResult(this.database, input.workItemId);
+      assertVerifiedWorkResult(this.database, input.workItemId);
       const producedRefs = strings(input.producedRefs); const decisionRefs = strings(input.decisionRefs); const blockerRefs = strings(input.blockerRefs);
       this.database.db.prepare("UPDATE organization_work_items SET status='completed',updated_at=? WHERE id=?").run(now, input.workItemId);
       this.database.db.prepare(`INSERT INTO work_outcomes(work_item_id,disposition,summary,produced_refs_json,decision_refs_json,blocker_refs_json,completed_at)
         VALUES(?,'completed',?,?,?,?,?)`).run(input.workItemId, summary, JSON.stringify(producedRefs), JSON.stringify(decisionRefs), JSON.stringify(blockerRefs), now);
       const unfinished = this.database.db.prepare("SELECT COUNT(*) AS count FROM organization_work_items WHERE mission_id=? AND status NOT IN ('completed','cancelled')")
         .get(String(row.mission_id)) as { count: number };
-      if (Number(unfinished.count) === 0 && String(row.mission_status) !== 'cancelled') this.database.db.prepare("UPDATE missions SET status='completed',updated_at=? WHERE id=?").run(now, String(row.mission_id));
+      // Tester completion is not mission completion when Developer code still
+      // requires independent review. The post-commit review release creates
+      // review work; an early terminal Mission would reject that work.
+      const pendingCodeReview = this.database.db.prepare(`
+        SELECT 1 AS required
+        FROM organization_work_items t
+        JOIN organization_agents ta ON ta.id=t.owner_agent_id
+        JOIN agent_slots ts ON ts.id=ta.runtime_slot_id
+        WHERE t.id=? AND ts.role='Tester'
+          AND EXISTS (
+            SELECT 1 FROM organization_work_items d
+            JOIN organization_agents da ON da.id=d.owner_agent_id
+            JOIN agent_slots ds ON ds.id=da.runtime_slot_id
+            WHERE d.mission_id=t.mission_id AND ds.role='Developer'
+          )
+      `).get(input.workItemId) as { required?: number } | undefined;
+      if (Number(unfinished.count) === 0 && !pendingCodeReview?.required && String(row.mission_status) !== 'cancelled') {
+        this.database.db.prepare("UPDATE missions SET status='completed',updated_at=? WHERE id=?").run(now, String(row.mission_id));
+      }
       this.event('WORK_ITEM_COMPLETED', input.workItemId, { completedBy, producedRefs, decisionRefs, blockerRefs }, now);
       return this.getOutcome(input.workItemId)!;
     });

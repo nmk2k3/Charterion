@@ -1,4 +1,4 @@
-import { reportNativeAgentRuntime, reportNativeIncident } from './nativeControl';
+import { readNativeControlSnapshot, reportNativeAgentRuntime, reportNativeIncident } from './nativeControl';
 import type { ChatSnapshot, ContentObservationIdentity, RoleBinding } from './contracts';
 
 export async function sha256Text(value: string): Promise<string> {
@@ -27,9 +27,16 @@ export async function reportSlotRuntime(
 ): Promise<RoleBinding> {
   const binding = await resolveBinding(tabId, snapshot);
   if (!binding.agentSlotId) return binding;
+  const control = await readNativeControlSnapshot();
+  const slot = control.agents.find((agent) => agent.id === binding.agentSlotId);
+  if (!slot) throw new Error('Assigned AgentSlot is missing from Kernel control state');
+  if (slot.workspaceBrowserProfileId && slot.browserProfileId &&
+      slot.workspaceBrowserProfileId !== slot.browserProfileId) {
+    throw new Error('Organization workspace and AgentSlot browser profile disagree');
+  }
   await reportNativeAgentRuntime({
     slotId: binding.agentSlotId,
-    profileId: 'gam-default',
+    profileId: slot.workspaceBrowserProfileId ?? slot.browserProfileId ?? 'gam-default',
     tabId,
     contentEpoch: observation.contentEpoch,
     revision: observation.revision,

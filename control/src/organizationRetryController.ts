@@ -221,7 +221,7 @@ export class OrganizationRetryController {
       workspaceId: workspace.id,
       currentCommitSha: observed.headSha,
       attemptsUsed,
-      latestResult: latest,
+      ...(latest === undefined ? {} : { latestResult: latest }),
     });
 
     if (decision.action !== 'retry') {

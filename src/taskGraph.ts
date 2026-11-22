@@ -1,5 +1,6 @@
 import { parseReviewResult } from './review';
 import { parseStructuredTaskResult } from './structuredResult';
+import { hasWebPatchMarkers } from './organizationWebPatchProtocol';
 import { DEFAULT_MAX_REVIEW_ROUNDS, validateTaskPolicy } from './taskPolicy';
 import type { AgentTask, ManagedTask, ReviewResult, SendAttemptRecord, StructuredTaskResult, TaskDisplayStatus } from './contracts';
 
@@ -33,6 +34,22 @@ export function validateTaskGraph(tasks: readonly AgentTask[]): void {
   for (const task of tasks) visit(task.id);
 }
 
+/**
+ * An Organization reply without a Web Patch envelope is not executable
+ * through the browser-only pipeline. It must never count as a machine claim.
+ * Allow an explicit operator retry without conflating it with a failed test.
+ */
+function organizationWebPatchMissing(task: AgentTask, attempt: SendAttemptRecord | undefined): boolean {
+  return Boolean(
+    attempt?.state === 'reply-observed' &&
+    !task.machineCompletion &&
+    task.kind === 'work' &&
+    task.completionPolicy === 'verified-claim' &&
+    typeof (task as AgentTask & { organizationWorkItemId?: unknown }).organizationWorkItemId === 'string' &&
+    !hasWebPatchMarkers(attempt.replyTextTail ?? ''),
+  );
+}
+
 interface AttemptEvaluation {
   status?: TaskDisplayStatus;
   reviewResult?: ReviewResult;
@@ -45,7 +62,11 @@ function evaluateAttempt(task: AgentTask, attempt: SendAttemptRecord | undefined
   if (task.completionPolicy === 'verified-claim' && task.machineCompletion) return { status: 'completed' };
   switch (attempt?.state) {
     case 'reply-observed': {
-      if (task.completionPolicy === 'verified-claim') return { status: 'running' };
+      if (task.completionPolicy === 'verified-claim') {
+        return organizationWebPatchMissing(task, attempt)
+          ? { status: 'attention' }
+          : { status: 'running' };
+      }
       if (task.completionPolicy === 'structured-result') {
         const parsed = parseStructuredTaskResult(attempt.replyTextTail ?? '');
         return parsed.ok
@@ -82,6 +103,7 @@ function isRetryableEvaluatedAttempt(
   if (attempt.state === 'failed' || attempt.state === 'uncertain') {
     return task.kind !== 'review' || !reviewExhausted;
   }
+  if (organizationWebPatchMissing(task, attempt)) return true;
   if (attempt.state === 'reply-observed' && task.completionPolicy === 'structured-result') {
     return evaluation.structuredResultError !== undefined;
   }

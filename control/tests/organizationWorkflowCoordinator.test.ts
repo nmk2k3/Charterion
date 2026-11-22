@@ -90,6 +90,9 @@ describe('OrganizationWorkflowCoordinator real Git closure', () => {
     );
     expect(result.status).toBe('review-ready');
     expect(result.reviewRequest).toBeDefined();
+    // Review materialization must never acquire a Reviewer runtime for the
+    // source WorkItem owner, even when the claim subject is a lease holder.
+    expect(plane.organization.getAgent(dri.id).runtimeSlotId).toBeUndefined();
     const request = plane.reviewPool.getRequest(result.reviewRequest!.id);
     expect(plane.reviewPool.listSlots(request.id)).toHaveLength(2);
     expect(plane.organization.listWorkItems(mission.id)).toHaveLength(3);
@@ -104,6 +107,7 @@ describe('OrganizationWorkflowCoordinator real Git closure', () => {
 
     const reviewerIds = (database.db.prepare('SELECT DISTINCT reviewer_agent_id FROM organization_review_work_items WHERE review_request_id=? ORDER BY reviewer_agent_id').all(request.id) as Array<{ reviewer_agent_id: string }>).map((row) => row.reviewer_agent_id);
     expect(reviewerIds).toHaveLength(2);
+    expect(reviewerIds).not.toContain(dri.id);
     for (const [index, slot] of plane.reviewPool.listSlots(request.id).entries()) {
       const reviewer = plane.organization.getAgent(reviewerIds[index]!);
       plane.reviewPool.claim({ slotId: slot.id, reviewerAgentId: reviewer.id }, 200 + index);

@@ -10,6 +10,7 @@ import type { OrganizationRuntimeAcquisitionAuthority } from './organizationRunt
 import type { OrganizationExecutionBridge } from './organizationExecutionBridge';
 import type { OrganizationAgentRecord } from './organizationContracts';
 import type { PromotionAuthority } from './promotionAuthority';
+import { WorkIngressAuthority } from './workIngressAuthority';
 import { assertOrganizationReviewReady } from './organizationReviewGate';
 
 export interface OrganizationWorkflowReconciliation {
@@ -51,17 +52,34 @@ export class OrganizationWorkflowCoordinator {
     `).get(workItemId) as { organizationId?: string; projectId?: string; missionId?: string } | undefined;
   }
 
-  private targetBranch(root: string, baseSha: string): string {
+  private targetBranch(root: string, workspaceBaseSha: string, headSha: string): { branch: string; baseSha: string } {
     for (const branch of ['main', 'master']) {
-      const result = spawnSync(this.gitPath, ['-C', root, 'rev-parse', '--verify', `${branch}^{commit}`], { encoding: 'utf8', windowsHide: true, timeout: 5000, shell: false });
-      if (result.status === 0 && result.stdout.trim().toLowerCase() === baseSha.toLowerCase()) return branch;
+      const result = spawnSync(this.gitPath, ['-C', root, 'rev-parse', '--verify', `${branch}^{commit}`], {
+        encoding: 'utf8', windowsHide: true, timeout: 5000, shell: false,
+      });
+      if (result.status !== 0) continue;
+      const targetTip = result.stdout.trim();
+      // A Tester may inherit a Developer commit, and a retry may inherit several
+      // verified commits. The target branch tip must still be an ancestor.
+      const ancestor = spawnSync(this.gitPath, ['-C', root, 'merge-base', '--is-ancestor', targetTip, headSha], {
+        encoding: 'utf8', windowsHide: true, timeout: 5000, shell: false,
+      });
+      if (ancestor.status === 0) return { branch, baseSha: targetTip };
     }
-    throw new Error('No main or master target branch matches the workspace base SHA');
+    throw new Error(`No main or master tip is an ancestor of reviewed head ${headSha} (workspace base ${workspaceBaseSha})`);
   }
 
-  private reviewerFor(organizationId: string, authorSubject: string, now: number): OrganizationAgentRecord {
+  private reviewerFor(
+    organizationId: string,
+    authorSubject: string,
+    sourceOwnerAgentId: string | undefined,
+    now: number,
+  ): OrganizationAgentRecord {
     const reusable = this.organization.listAgents(organizationId)
-      .filter((agent) => agent.status === 'active' && agent.id !== authorSubject && !agent.runtimeSlotId)
+      .filter((agent) => agent.status === 'active' &&
+        agent.id !== authorSubject &&
+        agent.id !== sourceOwnerAgentId &&
+        !agent.runtimeSlotId)
       .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))[0];
     if (reusable) return reusable;
     const department = this.organization.listDepartments(organizationId)[0] ?? this.organization.createDepartment({
@@ -98,7 +116,14 @@ export class OrganizationWorkflowCoordinator {
     if (existingBinding?.id) return;
     // Compatibility recovery for review work materialized before the typed binding existed.
     if (this.organization.listWorkItems(identity.missionId).some((item) => item.objective.includes(marker))) return;
-    const reviewer = this.reviewerFor(identity.organizationId, authorSubject, now);
+    const sourceTaskId = this.changes.getChangeRequest(request.changeRequestId).taskId;
+    const sourceOwnerAgentId = sourceTaskId.startsWith('org-work-')
+      ? this.organization.getWorkItem(sourceTaskId.slice('org-work-'.length)).ownerAgentId
+      : undefined;
+    // The author subject can be a lease holder/AgentSlot rather than the
+    // Organization agent ID. Never acquire a Review runtime for the
+    // original WorkItem owner, even in legacy workflows.
+    const reviewer = this.reviewerFor(identity.organizationId, authorSubject, sourceOwnerAgentId, now);
     this.organization.addMissionMember(identity.missionId, reviewer.id, 'reviewer', now);
     this.configureReviewer(reviewer, identity.projectId, root, now);
     const runtime = this.organizationRuntime.requestAndAcquire({
@@ -137,6 +162,27 @@ export class OrganizationWorkflowCoordinator {
     }
   }
 
+  private completeApprovedReviewWorks(reviewRequestId: string, headSha: string, now: number): void {
+    const bindings = this.database.db.prepare(`
+      SELECT work_item_id, reviewer_agent_id, review_slot_id
+      FROM organization_review_work_items WHERE review_request_id=?
+    `).all(reviewRequestId) as Array<{
+      work_item_id: string; reviewer_agent_id: string; review_slot_id: string;
+    }>;
+    for (const binding of bindings) {
+      const reviewWork = this.organization.getWorkItem(binding.work_item_id);
+      if (reviewWork.status === 'completed') continue;
+      new WorkIngressAuthority(this.database).completeWorkItem({
+        workItemId: reviewWork.id,
+        completedBy: binding.reviewer_agent_id,
+        summary: `Review Pool slot ${binding.review_slot_id} approved exact head ${headSha}`,
+        decisionRefs: [`review-request:${reviewRequestId}`, `review-slot:${binding.review_slot_id}`],
+      }, now);
+    }
+    this.database.db.prepare("UPDATE organization_review_work_items SET status='completed',updated_at=? WHERE review_request_id=? AND status='decided'")
+      .run(now, reviewRequestId);
+  }
+
   reconcileReviewDecision(reviewRequestId: string, now = Date.now()): Record<string, unknown> {
     const request = this.reviewPool.getRequest(required(reviewRequestId, 'Review request id'));
     if (request.status !== 'approved') return { reviewRequestId: request.id, status: request.status };
@@ -147,6 +193,12 @@ export class OrganizationWorkflowCoordinator {
       change.claimId,
       change.headSha,
     );
+    if (change.status === 'integrated') {
+      // A restart between Git promotion and WorkOutcome recording must not
+      // redo Git. Finish only the still-open Review WorkItems.
+      this.completeApprovedReviewWorks(request.id, change.headSha, now);
+      return { reviewRequestId: request.id, status: 'promoted', changeRequest: change };
+    }
     const slots = this.reviewPool.listSlots(request.id);
     const reviewer = slots.find((slot) => slot.reviewerAgentId)?.reviewerAgentId;
     if (!reviewer) throw new Error('Approved Review Request has no reviewer identity');
@@ -177,8 +229,7 @@ export class OrganizationWorkflowCoordinator {
       promotionId: decided.id, authoritySubject: 'system:release-governor',
     }, now) : decided;
     const integrated = this.changes.observeIntegration(prepared.id, now);
-    this.database.db.prepare("UPDATE organization_review_work_items SET status='completed',updated_at=? WHERE review_request_id=? AND status='decided'")
-      .run(now, request.id);
+    this.completeApprovedReviewWorks(request.id, current.headSha, now);
     this.event(current.projectId, 'ORGANIZATION_WORK_PROMOTED', request.id, {
       reviewRequestId: request.id, changeRequestId: current.id, queueEntryId: prepared.id,
       promotionId: applied.id, integratedSha: integrated.integratedSha ?? null,
@@ -207,11 +258,11 @@ export class OrganizationWorkflowCoordinator {
       );
       const project = this.database.db.prepare('SELECT root_path FROM projects WHERE id=?').get(identity.projectId) as { root_path?: string } | undefined;
       const root = required(project?.root_path, 'Project root');
-      const targetBranch = this.targetBranch(root, workspace.baseSha);
+      const target = this.targetBranch(root, workspace.baseSha, claim.commitSha);
       const changeRequest = this.changes.listChangeRequests(identity.projectId).find((item) => item.taskId === claim.taskId && item.status !== 'closed')
         ?? this.changes.open({
           projectId: identity.projectId, taskId: claim.taskId, subject: claim.subject, branch: workspace.branch,
-          targetBranch, baseSha: workspace.baseSha, headSha: claim.commitSha, claimId: claim.id,
+          targetBranch: target.branch, baseSha: target.baseSha, headSha: claim.commitSha, claimId: claim.id,
         }, now);
       const reviewRequest = this.reviewPool.open({
         organizationId: identity.organizationId, changeRequestId: changeRequest.id, risk: 'normal',

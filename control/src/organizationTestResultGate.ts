@@ -103,17 +103,6 @@ export function assertPassedTesterResult(
     reject('Tester execution identity mismatch');
   }
 
-  const completion = task.machineCompletion;
-
-  if (
-    completion?.kind !== 'verified-claim' ||
-    typeof completion.commitSha !== 'string' ||
-    !completion.commitSha ||
-    typeof completion.completedAt !== 'number'
-  ) {
-    reject('Verified machine completion is missing');
-  }
-
   const workspace = db.prepare(`
     SELECT id
     FROM task_workspaces
@@ -167,8 +156,39 @@ export function assertPassedTesterResult(
     reject('Latest test execution did not pass');
   }
 
-  if (result.commitSha !== completion.commitSha) {
+  // Distinguish a stale test from a missing machine completion. Kernel
+  // intentionally refuses to set machineCompletion when no exact-head PASS
+  // exists, but the completion RPC must still report the real test failure.
+  const completion = task.machineCompletion;
+  const verifiedClaim = db.prepare(`
+    SELECT c.commit_sha
+    FROM claims c
+    JOIN verifications v ON v.claim_id = c.id
+    WHERE c.project_id = ?
+      AND c.task_id = ?
+      AND c.status = 'verified'
+      AND v.status = 'passed'
+    ORDER BY v.completed_at DESC, v.id DESC
+    LIMIT 1
+  `).get(work.project_id, taskId) as
+    | { commit_sha: string | null }
+    | undefined;
+
+  const expectedSha = completion?.commitSha ?? verifiedClaim?.commit_sha;
+  if (
+    typeof expectedSha === 'string' &&
+    result.commitSha !== expectedSha
+  ) {
     reject('Tested commit differs from verified commit');
+  }
+
+  if (
+    completion?.kind !== 'verified-claim' ||
+    typeof completion.commitSha !== 'string' ||
+    !completion.commitSha ||
+    typeof completion.completedAt !== 'number'
+  ) {
+    reject('Verified machine completion is missing');
   }
 
   if (

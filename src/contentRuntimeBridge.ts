@@ -2,7 +2,7 @@ import { unavailableSnapshot, type ChatSnapshot } from './contracts';
 import { isChatSnapshot, isContentRecoveryState } from './runtimeCodec';
 import type { AttemptRecoveryObservation } from './recovery';
 
-export async function recoveryStateForTab(tab: chrome.tabs.Tab): Promise<AttemptRecoveryObservation | undefined> {
+export async function recoveryStateForTab(tab: Pick<chrome.tabs.Tab, 'id'>): Promise<AttemptRecoveryObservation | undefined> {
   if (tab.id === undefined) return undefined;
   try {
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'content:get-recovery-state' });

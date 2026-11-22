@@ -15,7 +15,11 @@ export function restartRecoveryCandidates(
   return attempts.filter((attempt) =>
     attempt.state === 'prepared' ||
     attempt.state === 'dispatched' ||
-    attempt.state === 'acknowledged',
+    // An acknowledged Organization prompt was visibly accepted by ChatGPT.
+    // After extension upgrade its original content epoch may be gone while
+    // sessionStorage still holds strict reply evidence. Do not prematurely
+    // downgrade it to uncertain before the live cross-epoch reconciliation.
+    (attempt.state === 'acknowledged' && !attempt.taskId?.startsWith('org-work-')),
   );
 }
 

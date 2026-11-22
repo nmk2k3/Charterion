@@ -39,6 +39,8 @@ export interface ControlAgentView {
   rolloverState: 'idle'|'requested'|'opening'|'bootstrapping';
   activeRolloverId?: string;
   browserProfileId?: string;
+  /** Distinct Kernel-assigned Organization workspace identity, not the physical browser profile. */
+  workspaceBrowserProfileId?: string;
   browserTabId?: number;
   browserError?: string;
   browserObservedAt?: number;
@@ -192,6 +194,7 @@ export function parseNativeControlSnapshot(value: unknown): NativeControlSnapsho
     if (item.conversationKey !== undefined) agent.conversationKey = stringField(item.conversationKey, 'agent.conversationKey');
     if (item.activeRolloverId !== undefined) agent.activeRolloverId = stringField(item.activeRolloverId, 'agent.activeRolloverId');
     if (item.browserProfileId !== undefined) agent.browserProfileId = stringField(item.browserProfileId, 'agent.browserProfileId');
+    if (item.workspaceBrowserProfileId !== undefined) agent.workspaceBrowserProfileId = stringField(item.workspaceBrowserProfileId, 'agent.workspaceBrowserProfileId');
     if (item.browserTabId !== undefined) agent.browserTabId = numberField(item.browserTabId, 'agent.browserTabId');
     if (item.browserError !== undefined) agent.browserError = stringField(item.browserError, 'agent.browserError');
     if (item.browserObservedAt !== undefined) agent.browserObservedAt = numberField(item.browserObservedAt, 'agent.browserObservedAt');

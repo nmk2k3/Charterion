@@ -8,6 +8,10 @@ import type { ReviewDecision } from './reviewPoolContracts';
 import { OrganizationWorkReconciler } from './organizationWorkReconciler';
 import { OrganizationTestRunner } from './organizationTestRunner';
 import { OrganizationRetryController } from './organizationRetryController';
+import { OrganizationReviewRelease } from './organizationReviewRelease';
+import { OrganizationAutonomyScheduler } from './organizationAutonomyScheduler';
+import { OrganizationWebPatchAuthority } from './organizationWebPatchAuthority';
+import { OrganizationWebReviewAuthority, type WebReviewDecision } from './organizationWebReviewAuthority';
 
 type Params = Record<string, unknown>;
 export interface OrganizationRpcAuth {
@@ -60,6 +64,13 @@ const METHODS = new Set([
   'org-test.latest',
   'org-retry.request',
   'org-retry.list',
+  'org-review.release',
+  'org-autonomy.tick',
+  'org-web-patch.preview',
+  'org-web-patch.apply',
+  'org-web-review.preview',
+  'org-web-review.decide',
+  'org-review.promote',
 ]);
 
 export class OrganizationRpcController {
@@ -118,18 +129,35 @@ export class OrganizationRpcController {
         return new OrganizationWorkReconciler(this.plane)
           .reconcile(stringParam(params, 'projectId')!);
       case 'org-test.run': {
-        this.auth.requireAdmin(request);
+        const projectId = stringParam(params, 'projectId')!;
+        const workItemId = stringParam(params, 'workItemId')!;
+        if (request.auth?.adminToken) {
+          this.auth.requireAdmin(request);
+        } else {
+          if (process.env.GAM_ALLOW_AGENT_TEST_RUNS !== '1') {
+            throw new Error('Agent test execution is disabled by operator policy');
+          }
+          const grant = this.auth.requireCapability(request, 'test:run', { projectId });
+          const work = this.plane.organization.getWorkItem(workItemId);
+          const mission = this.plane.organization.getMission(work.missionId);
+          const owner = work.ownerAgentId
+            ? this.plane.organization.getAgent(work.ownerAgentId) : undefined;
+          if (mission.projectId !== projectId || !owner?.runtimeSlotId ||
+              grant.taskId !== `org-work-${workItemId}` ||
+              grant.agentSlotId !== owner.runtimeSlotId ||
+              grant.subject !== owner.runtimeSlotId ||
+              this.plane.getAgentSlot(owner.runtimeSlotId).role !== 'Tester') {
+            throw new Error('Test execution capability must match assigned Tester workspace');
+          }
+        }
 
         const force = params.force;
-
         if (force !== undefined && typeof force !== 'boolean') {
           throw new Error('force must be a boolean');
         }
 
         return new OrganizationTestRunner(this.plane).run(
-          stringParam(params, 'projectId')!,
-          stringParam(params, 'workItemId')!,
-          force === true,
+          projectId, workItemId, force === true,
         );
       }
       case 'org-test.latest': {
@@ -192,6 +220,77 @@ export class OrganizationRpcController {
         }
       }
 
+      case 'org-web-review.preview': {
+        this.auth.requireBrowserOrAdmin(request);
+        return new OrganizationWebReviewAuthority(this.plane).preview({
+          projectId: stringParam(params, 'projectId')!,
+          taskId: stringParam(params, 'taskId')!,
+          slotId: stringParam(params, 'slotId')!,
+          tabId: numberParam(params, 'tabId')!,
+        });
+      }
+      case 'org-web-review.decide': {
+        this.auth.requireBrowserOrAdmin(request);
+        return new OrganizationWebReviewAuthority(this.plane).decide({
+          projectId: stringParam(params, 'projectId')!,
+          taskId: stringParam(params, 'taskId')!,
+          slotId: stringParam(params, 'slotId')!,
+          tabId: numberParam(params, 'tabId')!,
+          attemptId: stringParam(params, 'attemptId')!,
+          reviewSlotId: stringParam(params, 'reviewSlotId')!,
+          headSha: stringParam(params, 'headSha')!,
+          decision: enumParam<WebReviewDecision>(params, 'decision',
+            ['approve', 'request-changes', 'reject'] as const)!,
+          note: stringParam(params, 'note')!,
+        });
+      }
+      case 'org-review.promote': {
+        this.auth.requireAdmin(request);
+        return this.plane.organizationWorkflow.reconcileReviewDecision(
+          stringParam(params, 'reviewRequestId')!,
+        );
+      }
+      case 'org-web-patch.preview': {
+        this.auth.requireBrowserOrAdmin(request);
+        return new OrganizationWebPatchAuthority(this.plane).preview({
+          projectId: stringParam(params, 'projectId')!,
+          taskId: stringParam(params, 'taskId')!,
+          slotId: stringParam(params, 'slotId')!,
+          tabId: numberParam(params, 'tabId')!,
+        });
+      }
+      case 'org-web-patch.apply': {
+        this.auth.requireBrowserOrAdmin(request);
+        const files = params.files;
+        if (!Array.isArray(files) || !files.every((item) =>
+          item && typeof item === 'object' && !Array.isArray(item) &&
+          typeof (item as Record<string, unknown>).path === 'string' &&
+          typeof (item as Record<string, unknown>).content === 'string'
+        )) throw new Error('Web patch files must contain path/content strings');
+        return new OrganizationWebPatchAuthority(this.plane).apply({
+          projectId: stringParam(params, 'projectId')!,
+          taskId: stringParam(params, 'taskId')!,
+          slotId: stringParam(params, 'slotId')!,
+          tabId: numberParam(params, 'tabId')!,
+          attemptId: stringParam(params, 'attemptId')!,
+          baseSha: stringParam(params, 'baseSha')!,
+          summary: stringParam(params, 'summary')!,
+          files: files.map((item) => ({
+            path: (item as { path: string }).path,
+            content: (item as { content: string }).content,
+          })),
+        });
+      }
+      case 'org-autonomy.tick': {
+        this.auth.requireAdmin(request);
+        return new OrganizationAutonomyScheduler(this.plane)
+          .tick(stringParam(params, 'projectId')!);
+      }
+      case 'org-review.release': {
+        this.auth.requireAdmin(request);
+        return new OrganizationReviewRelease(this.plane)
+          .reconcile(stringParam(params, 'workItemId')!);
+      }
       case 'org-retry.list': {
         this.auth.requireAdmin(request);
 
@@ -378,7 +477,7 @@ export class OrganizationRpcController {
   }
 
   private workComplete(request: RpcRequest, params: Params): unknown {
-    const completedBy = stringParam(params, 'completedBy')!;
+    let completedBy = stringParam(params, 'completedBy')!;
     const workItemId = stringParam(params, 'workItemId')!;
 
     const work = this.plane.organization.getWorkItem(workItemId);
@@ -399,10 +498,38 @@ export class OrganizationRpcController {
         { projectId: mission.projectId },
       );
 
-      if (grant.subject !== completedBy) {
-        throw new Error(
-          'Capability subject does not match work completer',
-        );
+      const owner = work.ownerAgentId
+        ? this.plane.organization.getAgent(work.ownerAgentId)
+        : undefined;
+      const dri = mission.driAgentId
+        ? this.plane.organization.getAgent(mission.driAgentId)
+        : undefined;
+      if (owner?.runtimeSlotId) {
+        // Executable Organization Work requires the exact provisioned
+        // AgentSlot/worktree capability. A broad agent capability cannot
+        // bypass verified-claim authority or impersonate another Worker.
+        if (owner.status !== 'active' ||
+            grant.taskId !== `org-work-${workItemId}` ||
+            grant.agentSlotId !== owner.runtimeSlotId ||
+            grant.subject !== owner.runtimeSlotId ||
+            (completedBy !== owner.id && completedBy !== owner.runtimeSlotId)) {
+          throw new Error('Work completion capability is not bound to this WorkItem owner');
+        }
+        completedBy = owner.id;
+      } else {
+        // Preserve non-browser structured-result completion for the WorkItem
+        // owner or Mission DRI. Keep it impossible to complete verified-claim
+        // tasks or runtime-bound reviewers using an ordinary identity token.
+        const actorAuthorized =
+          (owner !== undefined && owner.id === grant.subject && owner.status === 'active') ||
+          (dri !== undefined && dri.id === grant.subject && dri.status === 'active');
+        if (work.completionPolicy !== 'structured-result' ||
+            !actorAuthorized ||
+            grant.agentSlotId !== undefined ||
+            grant.taskId !== undefined ||
+            completedBy !== grant.subject) {
+          throw new Error('Direct-tool completion requires an authorized owner or Mission DRI capability');
+        }
       }
     }
 
@@ -421,6 +548,35 @@ export class OrganizationRpcController {
       return outcome;
     }
 
+    // Review release is a separate, replayable post-commit action.
+    // Never roll back a verified WorkOutcome because review provisioning fails.
+    let reviewRelease: unknown;
+    try {
+      reviewRelease = new OrganizationReviewRelease(this.plane)
+        .reconcile(workItemId);
+    } catch (error) {
+      reviewRelease = {
+        status: 'blocked',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    // Release only after the outcome is durable and review release has
+    // inspected the exact-head Git evidence. A dirty worktree is preserved.
+    let workspaceRelease: { status: string; reason?: string } | undefined;
+    try {
+      const workspace = this.plane.workspaces.find(
+        mission.projectId, `org-work-${workItemId}`,
+      );
+      if (workspace?.status === 'active') this.plane.releaseTaskWorkspace(workspace.id);
+      workspaceRelease = { status: 'ok' };
+    } catch (error) {
+      workspaceRelease = {
+        status: 'deferred',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+
     // 2. Reconcile after completion is committed.
     // A reconciliation error must not make the
     // successful completion appear to have failed.
@@ -431,6 +587,8 @@ export class OrganizationRpcController {
 
       return {
         ...outcome,
+        reviewRelease,
+        workspaceRelease,
         reconciliation: {
           status: 'ok',
           ...reconciliation,
@@ -439,6 +597,7 @@ export class OrganizationRpcController {
     } catch (error) {
       return {
         ...outcome,
+        reviewRelease,
         reconciliation: {
           status: 'failed',
           error:

@@ -40,6 +40,106 @@ describe('ChatGPT adapter identity', () => {
 });
 
 describe('ChatGPT page observation', () => {
+  it('captures assistant replies in the current DIL response-body hierarchy', () => {
+    const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <div data-message-author-role="user">Implement uppercase greeting</div>
+      <div data-talvt-turn-state="complete">
+        <div data-content-search-unit-key="reply-1">
+          <div data-response-body>
+            <div data-chatgpt-selection-message-id="reply-42">
+              <div data-markdown-text-style>
+                <div data-dil-source-message-id="reply-42">
+                  <div data-dil-response data-dil-message-id="reply-42">
+                    <p data-d-component data-d-text-flow>
+                      <span data-d-stream-run data-d-text-flow>Patch proposal text</span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <form data-chatgpt-composer>
+        <div data-composer-markdown contenteditable="true" role="textbox"></div>
+      </form>`);
+    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/pilot', 'provisional:pilot');
+    expect(snapshot).toMatchObject({
+      status: 'idle',
+      assistantMessageCount: 1,
+      latestAssistantMessageId: 'message:reply-42',
+      latestAssistantText: 'Patch proposal text',
+    });
+    expect(snapshot.latestAssistantText).not.toContain('Implement uppercase greeting');
+  });
+
+  it('ignores user, generic and hidden DIL-looking nodes as assistant reply evidence', () => {
+    const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <div data-message-author-role="user">
+        <div data-response-body>
+          <div data-dil-response data-dil-message-id="spoofed">Do not capture</div>
+        </div>
+      </div>
+      <div data-response-body><p>Generic Markdown without assistant identity</p></div>
+      <div hidden data-response-body>
+        <div data-dil-response data-dil-message-id="hidden-reply">Hidden reply</div>
+      </div>
+      <textarea id="prompt-textarea"></textarea>`);
+    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/pilot', 'provisional:pilot');
+    expect(snapshot.assistantMessageCount).toBe(0);
+    expect(snapshot.latestAssistantText).toBe('');
+    expect(snapshot.latestAssistantMessageId).toBeUndefined();
+  });
+
+  it('recognizes the app-shell ProseMirror composer without a legacy prompt-textarea id', () => {
+    const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <form data-chatgpt-composer>
+        <div data-composer-markdown contenteditable="true" role="textbox"></div>
+        <button type="submit">Send</button>
+      </form>`);
+    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/', 'provisional:modern');
+    expect(snapshot).toMatchObject({ status: 'idle', confidence: 'direct' });
+    expect(snapshot.signals).toContain('composer-ready');
+    expect(findSendButton(dom.window.document)).not.toBeNull();
+  });
+
+  it('recognizes the scoped data-composer-input variant but rejects unrelated editable turns', () => {
+    const active = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <div data-composer-input><div contenteditable="true" role="textbox"></div></div>
+      <div data-message-author-role="assistant" contenteditable="true" role="textbox"></div>`);
+    expect(observePageStatus(active.window.document, 'https://chatgpt.com/').status).toBe('idle');
+    const unrelated = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <div data-message-author-role="assistant" contenteditable="true" role="textbox"></div>`);
+    expect(observePageStatus(unrelated.window.document, 'https://chatgpt.com/').status).toBe('unknown');
+  });
+
+  it('does not accept a hidden or disabled modern composer as ready', () => {
+    const hidden = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <form data-chatgpt-composer hidden>
+        <div data-composer-markdown contenteditable="true" role="textbox"></div>
+      </form>`);
+    expect(observePageStatus(hidden.window.document, 'https://chatgpt.com/').status).toBe('unknown');
+    const disabled = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <form data-chatgpt-composer>
+        <div data-composer-markdown contenteditable="true" role="textbox" aria-disabled="true"></div>
+      </form>`);
+    expect(observePageStatus(disabled.window.document, 'https://chatgpt.com/').status).toBe('unknown');
+  });
+
+  it('requires visible submit acceptance evidence with the app-shell composer', async () => {
+    const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <form data-chatgpt-composer>
+        <div data-composer-markdown contenteditable="true" role="textbox"></div>
+        <button type="submit" id="composer-submit-button">Send</button>
+      </form>`, { url: 'https://chatgpt.com/' });
+    const editor = dom.window.document.querySelector<HTMLElement>('[data-composer-markdown]')!;
+    dom.window.document.querySelector('button')!.addEventListener('click', (event) => {
+      event.preventDefault();
+      editor.textContent = '';
+    });
+    await expect(sendPrompt(dom.window.document, 'Pilot hello', 100)).resolves.toBeUndefined();
+  });
+
   it('marks a ready composer idle and captures the latest assistant message', () => {
     const dom = new JSDOM(`<!doctype html><title>Role 02 - ChatGPT</title>
       <div data-message-author-role="assistant" data-message-id="m1">first</div>

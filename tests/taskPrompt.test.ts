@@ -77,6 +77,35 @@ describe('task dispatch prompt', () => {
     expect(prompt).toContain('explicit retry of that protocol-invalid reply');
   });
 
+  it('uses browser-only V2 Web Patch instructions without contradictory CLI blocker language', () => {
+    const verified = {
+      ...task('org-work-pilot'),
+      targetRole: 'Developer',
+      completionPolicy: 'verified-claim' as const,
+      organizationWorkItemId: 'pilot',
+    };
+    const prompt = buildTaskDispatchPrompt(verified, [], {
+      projectId: 'project-1', taskId: verified.id, slotId: 'slot-1',
+      path: 'C:/pilot/worktree', branch: 'gam/developer/pilot',
+      baseSha: 'a'.repeat(40), resourceId: 'resource-1', leaseEpoch: 3,
+      capabilityTokenPath: 'C:/pilot/secret-capability', controlCliPath: 'C:/pilot/GAMCTL.cmd',
+      patchEnabled: true, previewHeadSha: 'a'.repeat(40),
+      sourceFiles: [
+        { path: 'test/greet.test.mjs', content: 'assert.equal(greet(), "HELLO");' },
+        { path: 'greet.mjs', content: 'export function greet() { return "hello"; }' },
+      ],
+    });
+    expect(prompt).toContain('CHARTERION_PATCH_V2_BEGIN');
+    expect(prompt).toContain('CHARTERION_PATCH_V2_END');
+    expect(prompt).toContain('"path": "greet.mjs"');
+    expect(prompt).toContain('DO NOT request CLI, terminal, Git or claim access');
+    expect(prompt).not.toContain('<<<CHARTERION_PATCH_V1>>>');
+    expect(prompt).not.toContain('If the CLI/worktree/Git capability is unavailable');
+    expect(prompt).not.toContain('claim.verify');
+    expect(prompt).not.toContain('capabilityFile:');
+    expect(prompt).not.toContain('org-work.complete --capability-file');
+  });
+
   it('requires a Kernel workspace for verified-claim work', () => {
     const verified = { ...task('verified'), completionPolicy: 'verified-claim' as const };
     expect(() => buildTaskDispatchPrompt(verified, [])).toThrow(/requires a Kernel-provisioned workspace/i);

@@ -29,6 +29,13 @@ describe('restart recovery policy', () => {
       .toEqual(['prepared', 'dispatched', 'acknowledged']);
   });
 
+  it('keeps acknowledged Organization deliveries for bounded cross-epoch reply recovery', () => {
+    const org = { ...attempt('org', 'acknowledged'), taskId: 'org-work-pilot' };
+    const ordinary = attempt('ordinary', 'acknowledged');
+    expect(restartRecoveryCandidates([org, ordinary]).map((item) => item.attemptId))
+      .toEqual(['ordinary']);
+  });
+
   it('fails prepared attempts because dispatch never became observable', () => {
     const prepared = attempt('prepared', 'prepared');
     const recovered = applyRestartRecovery(

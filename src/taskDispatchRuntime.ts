@@ -2,7 +2,7 @@ import { mapWithConcurrency } from './asyncPool';
 import { filterFleetTaskTabs } from './fleet';
 import { planReadyDispatches } from './supervisor';
 import { buildTaskDispatchPrompt } from './taskPrompt';
-import { provisionTaskWorkspaceForDispatch } from './taskWorkspaceDispatch';
+import { provisionTaskWorkspaceForDispatch, previewOrganizationReviewForDispatch } from './taskWorkspaceDispatch';
 import type { ManagedTab, ManagedTask, SendResult, TaskDispatchResult } from './contracts';
 import type { NativeControlSnapshot } from './nativeControl';
 
@@ -46,7 +46,8 @@ export async function dispatchReadyManagedTasks(
         lastAttempt && managed.task.retryAfterAttemptId === lastAttempt.attemptId && managed.structuredResultError
         ? { attemptId: lastAttempt.attemptId, error: managed.structuredResultError }
         : undefined;
-      const sent = await dispatch(decision.tabId, buildTaskDispatchPrompt(managed.task, dependencies, workspace, structuredRetry), batchId, managed.task.id);
+      const review = await previewOrganizationReviewForDispatch(managed.task, decision.tabId, dispatchTabs, control);
+      const sent = await dispatch(decision.tabId, buildTaskDispatchPrompt(managed.task, dependencies, workspace, structuredRetry, review), batchId, managed.task.id);
       const result: TaskDispatchResult = { taskId: managed.task.id, ok: sent.ok, attemptId: sent.attemptId };
       if (sent.error) result.error = sent.error;
       return result;

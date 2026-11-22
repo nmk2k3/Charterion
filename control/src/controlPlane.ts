@@ -18,6 +18,7 @@ import { OrganizationExecutionBridge } from './organizationExecutionBridge';
 import { OrganizationRuntimeAcquisitionAuthority } from './organizationRuntimeAcquisitionAuthority';
 import { AutonomousIntakeAuthority } from './autonomousIntakeAuthority';
 import { OrganizationWorkflowCoordinator } from './organizationWorkflowCoordinator';
+import { OrganizationTestRunner } from './organizationTestRunner';
 import { parseJsonRecord, parseJsonStringArray } from './persistenceCodec';
 import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import { projectRootIdentity } from './projectIdentity';
@@ -414,7 +415,7 @@ export class ControlPlane {
         if (active.holderId !== slot.id || active.taskId !== taskId || active.mode !== 'exclusive') throw new Error('Task workspace resource already has an incompatible active lease');
         lease = active;
       } else lease = this.acquireLease({ resourceId: resource.id, projectId: project.id, holderId: slot.id, taskId, mode: 'exclusive' }, now);
-      capability = this.issueCapability({ subject: slot.id, projectId: project.id, agentSlotId: slot.id, taskId, leaseEpoch: lease.epoch, scopes: ['claim:submit','artifact:register','claim:read','claim:verify','org-work:create','org-work:status','review:read','review:claim','review:decide'], resourceIds: [resource.id], ttlMs: 7 * 24 * 60 * 60 * 1000 }, now);
+      capability = this.issueCapability({ subject: slot.id, projectId: project.id, agentSlotId: slot.id, taskId, leaseEpoch: lease.epoch, scopes: ['claim:submit','artifact:register','claim:read','claim:verify','work:complete','org-work:create','org-work:status','review:read','review:claim','review:decide', ...(slot.role === 'Tester' && process.env.GAM_ALLOW_AGENT_TEST_RUNS === '1' ? ['test:run'] : [])], resourceIds: [resource.id], ttlMs: 7 * 24 * 60 * 60 * 1000 }, now);
       workspace = this.workspaces.record({ ...materialized, projectId: project.id, taskId, slotId: slot.id, resourceId: resource.id, leaseId: lease.id, leaseEpoch: lease.epoch, capabilityId: capability.id, capabilityToken: capability.token }, now);
       this.event(project.id, 'TASK_WORKSPACE_PROVISIONED', workspace.id, { taskId, slotId: slot.id, branch: workspace.branch, path: workspace.path, resourceId: resource.id, leaseId: lease.id }, now);
       return workspace!;
@@ -489,18 +490,36 @@ export class ControlPlane {
         if (completion.kind !== 'verified-claim' || completion.claimId !== claim.id || completion.verificationId !== verification.id || completion.commitSha !== claim.commitSha) {
           throw new Error('Verified-claim task already has a different machine completion');
         }
-        if (workspace) this.finalizeVerifiedTaskWorkspace(workspace.id, now);
+        // Organization work needs its scoped token for org-work.complete.
+        // The RPC releases the workspace after the durable WorkOutcome commits.
+        if (workspace && !claim.taskId.startsWith('org-work-')) this.finalizeVerifiedTaskWorkspace(workspace.id, now);
         return verification;
       }
       if (!workspace || workspace.status !== 'active') throw new Error('Verified-claim task has no active durable TaskWorkspace');
       if (!claim.commitSha || workspace.resourceId !== claim.resourceId || workspace.leaseId !== claim.leaseId || workspace.leaseEpoch !== claim.leaseEpoch || workspace.slotId !== claim.subject) {
         throw new Error('Verified claim does not match the task workspace authority');
       }
+      if (claim.taskId.startsWith('org-work-') && task?.targetRole === 'Tester') {
+        // A Git-valid claim is not a test-valid result. Keep the Tester
+        // workspace and retry authority active until exact-head tests PASS.
+        const workItemId = claim.taskId.slice('org-work-'.length);
+        const test = new OrganizationTestRunner(this).latest(claim.projectId, workItemId);
+        if (!test || test.status !== 'passed' || test.suite !== 'node:test' ||
+            test.exitCode !== 0 || test.error || test.workspaceId !== workspace.id ||
+            test.commitSha !== claim.commitSha || test.taskId !== claim.taskId ||
+            test.projectId !== claim.projectId || test.workItemId !== workItemId) {
+          this.event(claim.projectId, 'ORG_TEST_FINALIZATION_BLOCKED', claim.taskId, {
+            claimId: claim.id, testedCommitSha: test?.commitSha ?? null,
+            testStatus: test?.status ?? 'missing', verifiedCommitSha: claim.commitSha,
+          }, now);
+          return { ...verification, machineCompletionBlocked: 'Tester needs a passing test result for the exact verified commit' };
+        }
+      }
       this.work.completeVerifiedClaim({ taskId: claim.taskId, claimId: claim.id, verificationId: verification.id, commitSha: claim.commitSha }, verification.completedAt);
       if (claim.taskId.startsWith('org-work-')) {
         this.organizationWorkflow.reconcileVerifiedWork(claim, verification, workspace, now);
       }
-      this.finalizeVerifiedTaskWorkspace(workspace.id, now);
+      if (!claim.taskId.startsWith('org-work-')) this.finalizeVerifiedTaskWorkspace(workspace.id, now);
     }
     return verification;
   }
@@ -657,6 +676,104 @@ export class ControlPlane {
       return this.getAgentSlot(slotId);
     });
   }
+  /**
+   * Admin-only correction of a legacy local-chatgpt alias to the canonical URL
+   * of the SAME conversation. Not a new conversation and never a rollover.
+   * Requires an exact previously observed Organization task reply and an
+   * explicit operator-confirmed tab identity, and retains audit history.
+   */
+  repairLegacyAgentConversation(
+    slotId: string,
+    expectedLegacyKey: string,
+    observedCanonicalKey: string,
+    evidenceAttemptId: string,
+    observedTabId: number,
+    now = Date.now(),
+  ): AgentSlot {
+    if (!/^conversation:local-chatgpt:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(expectedLegacyKey)) {
+      throw new Error('Legacy repair requires an exact local-chatgpt UUID alias');
+    }
+    if (!/^conversation:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(observedCanonicalKey)) {
+      throw new Error('Legacy repair requires an exact canonical ChatGPT UUID');
+    }
+    const attemptId = nonEmpty(evidenceAttemptId, 'Evidence attempt id');
+    positiveInt(observedTabId, 'Observed tab id');
+    return this.database.transaction(() => {
+      const slot = this.getAgentSlot(slotId);
+      if (slot.conversationKey !== expectedLegacyKey ||
+          slot.desiredState !== 'active' || slot.browserState !== 'absent' ||
+          slot.browserTabId !== undefined || slot.rolloverState !== 'idle' ||
+          slot.browserQuarantined) {
+        throw new Error('Legacy repair requires the matching active, absent, non-quarantined AgentSlot with no rollover');
+      }
+      const outstanding = this.database.db.prepare(
+        "SELECT id FROM browser_operations WHERE slot_id=? AND state IN ('planned','dispatched') LIMIT 1",
+      ).get(slot.id) as { id?: string } | undefined;
+      if (outstanding) throw new Error('Legacy repair blocked by an unsettled browser operation');
+
+      const rawAttempt = this.database.db.prepare('SELECT document_json FROM manager_attempts WHERE id=?')
+        .get(attemptId) as { document_json?: string } | undefined;
+      if (!rawAttempt?.document_json) throw new Error('Legacy repair requires a durable reply-observed attempt');
+      const attempt = JSON.parse(rawAttempt.document_json) as Record<string, unknown>;
+      if (attempt.attemptId !== attemptId || attempt.tabId !== observedTabId ||
+          attempt.state !== 'reply-observed' || typeof attempt.taskId !== 'string' ||
+          !attempt.taskId.startsWith('org-work-') ||
+          (attempt.conversationKey !== expectedLegacyKey && attempt.conversationKey !== observedCanonicalKey)) {
+        throw new Error('Legacy repair attempt does not match the observed Organization conversation and tab');
+      }
+      const rawTask = this.database.db.prepare('SELECT document_json FROM manager_tasks WHERE id=?')
+        .get(attempt.taskId) as { document_json?: string } | undefined;
+      if (!rawTask?.document_json) throw new Error('Legacy repair evidence task is missing');
+      const task = JSON.parse(rawTask.document_json) as Record<string, unknown>;
+      if (task.id !== attempt.taskId || task.targetRole !== slot.role ||
+          task.project !== this.requireProject(slot.projectId).name ||
+          task.completionPolicy !== 'verified-claim' ||
+          typeof task.organizationWorkItemId !== 'string') {
+        throw new Error('Legacy repair attempt does not belong to this Organization Agent task');
+      }
+
+      const linked = this.database.db.prepare('SELECT id FROM organization_agents WHERE runtime_slot_id=?')
+        .get(slot.id) as { id?: string } | undefined;
+      if (!linked?.id) throw new Error('Legacy repair requires an Organization Agent bound to this slot');
+      const ownedWork = this.database.db.prepare('SELECT owner_agent_id FROM organization_work_items WHERE id=?')
+        .get(task.organizationWorkItemId) as { owner_agent_id?: string | null } | undefined;
+      if (!ownedWork || ownedWork.owner_agent_id !== linked.id) {
+        throw new Error('Legacy repair evidence WorkItem is not owned by the bound Organization Agent');
+      }
+      const active = this.agentContinuity.active(linked.id);
+      if (!active || active.conversationKey !== expectedLegacyKey || active.runtimeSlotId !== slot.id) {
+        throw new Error('Legacy repair persistent Organization conversation does not match');
+      }
+      const local = this.database.db.prepare(
+        "SELECT id FROM agent_conversations WHERE slot_id=? AND conversation_key=? AND status='active'",
+      ).get(slot.id, expectedLegacyKey) as { id?: string } | undefined;
+      if (!local?.id) throw new Error('Legacy repair requires an active AgentSlot conversation record');
+
+      const targetSlot = this.database.db.prepare('SELECT id FROM agent_slots WHERE conversation_key=? LIMIT 1')
+        .get(observedCanonicalKey) as { id?: string } | undefined;
+      const targetLocal = this.database.db.prepare('SELECT id FROM agent_conversations WHERE conversation_key=? LIMIT 1')
+        .get(observedCanonicalKey) as { id?: string } | undefined;
+      const targetOrg = this.database.db.prepare('SELECT id FROM organization_agent_conversations WHERE conversation_key=? LIMIT 1')
+        .get(observedCanonicalKey) as { id?: string } | undefined;
+      if (targetSlot || targetLocal || targetOrg) {
+        throw new Error('Legacy repair target conversation already belongs to a durable identity');
+      }
+
+      this.database.db.prepare('UPDATE agent_conversations SET conversation_key=? WHERE id=?')
+        .run(observedCanonicalKey, local.id);
+      this.database.db.prepare("UPDATE organization_agent_conversations SET conversation_key=? WHERE id=? AND status='active'")
+        .run(observedCanonicalKey, active.id);
+      this.database.db.prepare('UPDATE agent_slots SET conversation_key=?,lease_epoch=lease_epoch+1,updated_at=? WHERE id=?')
+        .run(observedCanonicalKey, now, slot.id);
+      this.event(slot.projectId, 'AGENT_LEGACY_CONVERSATION_ID_REPAIRED', slot.id, {
+        organizationAgentId: linked.id, legacyKey: expectedLegacyKey,
+        canonicalKey: observedCanonicalKey, evidenceAttemptId: attemptId,
+        evidenceTabId: observedTabId, generation: active.generation,
+      }, now);
+      return this.getAgentSlot(slot.id);
+    });
+  }
+
   requestAgentConversationRollover(slotId: string, reason: string, handoffText: string, state: Record<string, unknown>, now = Date.now()) {
     const slot = this.getAgentSlot(slotId); const project = this.requireProject(slot.projectId);
     if (project.status !== 'active' || slot.desiredState !== 'active') throw new Error('Conversation rollover requires an active project and AgentSlot');
