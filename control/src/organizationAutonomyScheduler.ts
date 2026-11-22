@@ -62,7 +62,10 @@ export class OrganizationAutonomyScheduler {
       const developer = [...works].reverse().find((item) =>
         this.role(item.ownerAgentId) === 'Developer' && item.ownerAgentId &&
         this.plane.organization.getAgent(item.ownerAgentId).status === 'active'
-      )?.ownerAgentId;
+      )?.ownerAgentId ??
+        this.plane.organization.listAgents(mission.organizationId).find((agent) =>
+          agent.status === 'active' && this.role(agent.id) === 'Developer'
+        )?.id;
       for (const work of works) {
         if (this.role(work.ownerAgentId) !== 'Tester') continue;
         if (work.status === 'completed') {
