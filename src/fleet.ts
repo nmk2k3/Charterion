@@ -10,12 +10,13 @@ export type FleetAction =
   | { kind: 'report-open'; slotId: string; tabId: number; conversationKey?: string }
   | { kind: 'report-absent'; slotId: string };
 
-export function agentConversationUrl(conversationKey?: string): string {
+export function agentConversationUrl(conversationKey?: string): string | undefined {
   if (!conversationKey?.startsWith('conversation:')) return 'https://chatgpt.com/';
   const id = conversationKey.slice('conversation:'.length);
-  // Never silently replace a durable /c/ identity with a new root conversation.
-  // ChatGPT can use local-chatgpt:* inside its /c/ route; the Kernel persists
-  // the complete observed identity and must recover the same one.
+  // local-chatgpt:* was a legacy synthetic alias, NOT a navigable /c/ id.
+  // Never spawn a mismatched ChatGPT conversation for a persistent Agent;
+  // an administrator must first correct the alias using verified evidence.
+  if (/^local-chatgpt:/i.test(id)) return undefined;
   if (!id || id === 'new' || /^WEB:/i.test(id)) return 'https://chatgpt.com/';
   return `https://chatgpt.com/c/${encodeURIComponent(id)}`;
 }
@@ -99,7 +100,8 @@ export function planFleetReconciliation(
         if (agent.browserState === 'opening' && reservedTabId !== undefined &&
             (agent.browserObservedAt === undefined || now - agent.browserObservedAt <= openingGraceMs)) continue;
         if (agent.browserState !== 'absent') { actions.push({ kind: 'report-absent', slotId: agent.id }); continue; }
-        actions.push({ kind: 'open', slotId: agent.id, url: agentConversationUrl(agent.conversationKey) });
+        const url = agentConversationUrl(agent.conversationKey);
+        if (url) actions.push({ kind: 'open', slotId: agent.id, url });
         continue;
       }
       const conversationKey = tab.snapshot.conversationKey.startsWith('conversation:')
