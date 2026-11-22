@@ -31,4 +31,11 @@ export {
   dispatchNativeBrowserOperation,
   settleNativeBrowserOperation,
   reportNativeIncident,
+  previewNativeOrganizationWebPatch,
+  applyNativeOrganizationWebPatch,
+} from './nativeControlPersistent';
+export type {
+  NativeOrganizationWebPatchPreview,
+  NativeOrganizationWebPatchInput,
+  NativeOrganizationWebPatchResult,
 } from './nativeControlPersistent';
