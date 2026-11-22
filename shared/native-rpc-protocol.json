@@ -96,6 +96,14 @@
       "domain": "organization"
     },
     {
+      "name": "org-web-review.decide",
+      "domain": "organization"
+    },
+    {
+      "name": "org-web-review.preview",
+      "domain": "organization"
+    },
+    {
       "name": "org-web-patch.preview",
       "domain": "organization"
     },
