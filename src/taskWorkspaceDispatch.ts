@@ -1,5 +1,5 @@
 import type { AgentTask, ManagedTab } from './contracts';
-import { provisionNativeTaskWorkspace, type NativeControlSnapshot } from './nativeControl';
+import { provisionNativeTaskWorkspace, previewNativeOrganizationWebPatch, type NativeControlSnapshot } from './nativeControl';
 import type { TaskWorkspacePromptContext } from './taskPrompt';
 
 export async function provisionTaskWorkspaceForDispatch(
@@ -15,5 +15,22 @@ export async function provisionTaskWorkspaceForDispatch(
   const agent = control.agents.find((item) => item.id === slotId);
   if (!agent) throw new Error(`Task ${task.id} AgentSlot ${slotId} is missing from Kernel control state`);
   const workspace = await provisionNativeTaskWorkspace({ projectId: agent.projectId, slotId, taskId: task.id });
-  return workspace;
+  // Web-patch previews are opt-in; a legacy/disabled host still dispatches
+  // the normal scoped WorkItem prompt without pretending that it can write.
+  if (typeof (task as AgentTask & { organizationWorkItemId?: unknown }).organizationWorkItemId !== 'string') {
+    return workspace;
+  }
+  try {
+    const preview = await previewNativeOrganizationWebPatch({
+      projectId: agent.projectId, taskId: task.id, slotId, tabId,
+    });
+    return {
+      ...workspace,
+      patchEnabled: preview.patchEnabled,
+      previewHeadSha: preview.headSha,
+      sourceFiles: preview.files,
+    };
+  } catch {
+    return workspace;
+  }
 }
