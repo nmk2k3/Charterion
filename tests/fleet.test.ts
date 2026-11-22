@@ -26,12 +26,17 @@ describe('agent fleet reconciliation', () => {
     expect(agentConversationUrl()).toBe('https://chatgpt.com/');
     expect(agentConversationUrl('conversation:abc/def')).toBe('https://chatgpt.com/c/abc%2Fdef');
     expect(agentConversationUrl('conversation:WEB:temporary')).toBe('https://chatgpt.com/');
+    expect(agentConversationUrl('conversation:local-chatgpt:7e49eef1-6681-4066-9c97-9a319783140e')).toBe('https://chatgpt.com/');
+    expect(agentConversationUrl('conversation:LOCAL-CHATGPT:temporary')).toBe('https://chatgpt.com/');
     expect(agentConversationUrl('conversation:new')).toBe('https://chatgpt.com/');
     expect(planFleetReconciliation([agent()], [], {})).toEqual([
       { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/' },
     ]);
     expect(planFleetReconciliation([agent({ conversationKey: 'conversation:abc' })], [], {})).toEqual([
       { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/c/abc' },
+    ]);
+    expect(planFleetReconciliation([agent({ conversationKey: 'conversation:local-chatgpt:session' })], [], {})).toEqual([
+      { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/' },
     ]);
   });
 
