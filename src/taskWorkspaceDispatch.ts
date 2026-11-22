@@ -1,5 +1,5 @@
 import type { AgentTask, ManagedTab } from './contracts';
-import { provisionNativeTaskWorkspace, previewNativeOrganizationWebPatch, type NativeControlSnapshot } from './nativeControl';
+import { provisionNativeTaskWorkspace, previewNativeOrganizationWebPatch, previewNativeOrganizationWebReview, type NativeControlSnapshot, type NativeOrganizationReviewPreview } from './nativeControl';
 import type { TaskWorkspacePromptContext } from './taskPrompt';
 
 export async function provisionTaskWorkspaceForDispatch(
@@ -32,5 +32,31 @@ export async function provisionTaskWorkspaceForDispatch(
     };
   } catch {
     return workspace;
+  }
+}
+
+/** Review Pool tasks have read-only diff access, never a writable worktree. */
+export async function previewOrganizationReviewForDispatch(
+  task: AgentTask,
+  tabId: number,
+  tabs: readonly ManagedTab[],
+  control: NativeControlSnapshot,
+): Promise<NativeOrganizationReviewPreview | undefined> {
+  if (task.completionPolicy !== 'structured-result' || !task.targetRole.startsWith('Review:')) {
+    return undefined;
+  }
+  const tab = tabs.find((item) => item.tabId === tabId);
+  const slotId = tab?.binding.agentSlotId;
+  if (!slotId) return undefined;
+  const slot = control.agents.find((item) => item.id === slotId);
+  if (!slot || slot.browserTabId !== tabId || slot.role !== task.targetRole) return undefined;
+  try {
+    return await previewNativeOrganizationWebReview({
+      projectId: slot.projectId, taskId: task.id, slotId, tabId,
+    });
+  } catch {
+    // Disabled or older Kernel: fall back to the original manual
+    // structured review. No native approval is inferred from prose.
+    return undefined;
   }
 }
