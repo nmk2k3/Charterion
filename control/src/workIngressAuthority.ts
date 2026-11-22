@@ -206,8 +206,10 @@ export class WorkIngressAuthority {
       const dri = row.dri_agent_id === null ? undefined : String(row.dri_agent_id);
       if (completedBy !== owner && completedBy !== dri) throw new Error('Only the Work owner or Mission DRI may complete the Work item');
       assertWorkDependenciesCompleted(this.database, input.workItemId);
-      assertVerifiedWorkResult(this.database, input.workItemId);
+      // Report the concrete latest Tester result first; the independent
+      // verified-claim guard still applies before writing any WorkOutcome.
       assertPassedTesterResult(this.database, input.workItemId);
+      assertVerifiedWorkResult(this.database, input.workItemId);
       const producedRefs = strings(input.producedRefs); const decisionRefs = strings(input.decisionRefs); const blockerRefs = strings(input.blockerRefs);
       this.database.db.prepare("UPDATE organization_work_items SET status='completed',updated_at=? WHERE id=?").run(now, input.workItemId);
       this.database.db.prepare(`INSERT INTO work_outcomes(work_item_id,disposition,summary,produced_refs_json,decision_refs_json,blocker_refs_json,completed_at)
