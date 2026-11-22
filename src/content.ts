@@ -196,7 +196,9 @@ observer.observe(document.documentElement, {
   childList: true,
   subtree: true,
   attributes: true,
-  attributeFilter: ['disabled', 'aria-disabled', 'aria-busy'],
+  // Some ChatGPT app-shell variants mount the editor before annotating its
+  // composer role/attributes. Re-evaluate readiness when those arrive.
+  attributeFilter: ['disabled', 'aria-disabled', 'aria-busy', 'contenteditable', 'role', 'data-chatgpt-composer', 'data-composer-input', 'data-composer-markdown'],
 });
 window.addEventListener('popstate', schedulePublish);
 window.addEventListener('hashchange', schedulePublish);
