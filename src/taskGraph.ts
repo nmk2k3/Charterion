@@ -1,6 +1,6 @@
 import { parseReviewResult } from './review';
 import { parseStructuredTaskResult } from './structuredResult';
-import { WEB_PATCH_OPEN, WEB_PATCH_CLOSE } from './organizationWebPatchProtocol';
+import { hasWebPatchMarkers } from './organizationWebPatchProtocol';
 import { DEFAULT_MAX_REVIEW_ROUNDS, validateTaskPolicy } from './taskPolicy';
 import type { AgentTask, ManagedTask, ReviewResult, SendAttemptRecord, StructuredTaskResult, TaskDisplayStatus } from './contracts';
 
@@ -46,8 +46,7 @@ function organizationWebPatchMissing(task: AgentTask, attempt: SendAttemptRecord
     task.kind === 'work' &&
     task.completionPolicy === 'verified-claim' &&
     typeof (task as AgentTask & { organizationWorkItemId?: unknown }).organizationWorkItemId === 'string' &&
-    !(attempt.replyTextTail ?? '').includes(WEB_PATCH_OPEN) &&
-    !(attempt.replyTextTail ?? '').includes(WEB_PATCH_CLOSE),
+    !hasWebPatchMarkers(attempt.replyTextTail ?? ''),
   );
 }
 
