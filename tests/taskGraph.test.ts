@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveManagedTasks, validateTaskGraph } from '../src/taskGraph';
+import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from '../src/taskGraph';
 import type { AgentTask, SendAttemptRecord } from '../src/contracts';
 
 function task(id: string, dependsOn: string[] = [], attemptIds: string[] = []): AgentTask {
@@ -147,6 +147,44 @@ describe('structured-result completion', () => {
 });
 
 describe('verified claim completion', () => {
+  it('requires attention and explicit retry for Organization replies without a Web Patch', () => {
+    const org = {
+      ...task('org-work-pilot', [], ['attempt-pilot']),
+      completionPolicy: 'verified-claim' as const,
+      organizationWorkItemId: 'work-pilot',
+    };
+    const noPatch = {
+      ...attempt('attempt-pilot', 'reply-observed'),
+      replyTextTail: 'I cannot access the scoped CLI. No edit was made.',
+    };
+    expect(deriveManagedTasks([org], [noPatch])[0]?.status).toBe('attention');
+    expect(isRetryableTaskAttempt(org, noPatch)).toBe(true);
+
+    const retried = { ...org, retryAfterAttemptId: 'attempt-pilot' };
+    expect(deriveManagedTasks([retried], [noPatch])[0]?.status).toBe('ready');
+  });
+
+  it('does not retry a validly enveloped proposal or a verified machine completion', () => {
+    const org = {
+      ...task('org-work-pilot', [], ['attempt-pilot']),
+      completionPolicy: 'verified-claim' as const,
+      organizationWorkItemId: 'work-pilot',
+    };
+    const proposal = {
+      ...attempt('attempt-pilot', 'reply-observed'),
+      replyTextTail: '<<<CHARTERION_PATCH_V1>>>\n{"taskId":"org-work-pilot"}\n<<<END_CHARTERION_PATCH_V1>>>',
+    };
+    expect(deriveManagedTasks([org], [proposal])[0]?.status).toBe('running');
+    expect(isRetryableTaskAttempt(org, proposal)).toBe(false);
+
+    const verified = {
+      ...org,
+      machineCompletion: { kind: 'verified-claim' as const, claimId: 'claim', verificationId: 'verify', completedAt: 20 },
+    };
+    expect(deriveManagedTasks([verified], [attempt('attempt-pilot', 'reply-observed')])[0]?.status).toBe('completed');
+    expect(isRetryableTaskAttempt(verified, proposal)).toBe(false);
+  });
+
   it('does not let a browser reply complete a verified-claim task', () => {
     const verified = { ...task('machine', [], ['attempt-machine']), completionPolicy: 'verified-claim' as const };
     const reply = { ...attempt('attempt-machine', 'reply-observed'), replyTextTail: 'DONE' };
