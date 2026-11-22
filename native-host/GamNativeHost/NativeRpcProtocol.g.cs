@@ -32,6 +32,8 @@ internal static class NativeRpcProtocol
         "events.list",
         "org-work.project-execution",
         "org-web-patch.apply",
+        "org-web-review.decide",
+        "org-web-review.preview",
         "org-web-patch.preview",
         "work.snapshot",
         "work.replace",
