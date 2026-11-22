@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { ControlDatabase } from './database';
+import { assertOrganizationPromotionReady } from './organizationReviewGate';
 import type {
   ApplySelfHostingPromotionInput,
   DecideSelfHostingPromotionInput,
@@ -106,6 +107,7 @@ export class PromotionAuthority {
     const expectedParentSha = required(input.expectedParentSha, 'Expected parent SHA');
     const targetRef = required(input.targetRef, 'Target ref');
     const requestedBy = required(input.requestedBy, 'Promotion requester');
+    assertOrganizationPromotionReady(this.database, claimId, projectId, candidateSha);
     const replayMatches = (current: SelfHostingPromotion): boolean => current.claimId === claimId &&
       sameSha(current.candidateSha, candidateSha) && current.targetRef === targetRef &&
       sameSha(current.expectedParentSha, expectedParentSha) && current.requestedBy === requestedBy;
@@ -156,6 +158,7 @@ export class PromotionAuthority {
     }
     if (input.decision === 'approve') {
       this.verifiedExactClaim(current.claimId, current.projectId, current.candidateSha);
+      assertOrganizationPromotionReady(this.database, current.claimId, current.projectId, current.candidateSha);
     }
     return this.database.transaction(() => {
       this.database.db.prepare(`
@@ -198,6 +201,7 @@ export class PromotionAuthority {
     if (current.status !== 'approved' || !current.decisionBy) throw new Error(`Self-hosting promotion ${current.id} is not approved`);
     if (current.decisionBy !== authority) throw new Error('Only the approving independent authority may apply this promotion');
     this.verifiedExactClaim(current.claimId, current.projectId, current.candidateSha);
+    assertOrganizationPromotionReady(this.database, current.claimId, current.projectId, current.candidateSha);
     this.git(current.projectId, ['cat-file', '-e', `${current.candidateSha}^{commit}`]);
     const observed = this.git(current.projectId, ['rev-parse', '--verify', `${current.targetRef}^{commit}`]);
     if (sameSha(observed, current.candidateSha)) return this.markPromoted(current, now);
