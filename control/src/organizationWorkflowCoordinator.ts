@@ -147,6 +147,27 @@ export class OrganizationWorkflowCoordinator {
     }
   }
 
+  private completeApprovedReviewWorks(reviewRequestId: string, headSha: string, now: number): void {
+    const bindings = this.database.db.prepare(`
+      SELECT work_item_id, reviewer_agent_id, review_slot_id
+      FROM organization_review_work_items WHERE review_request_id=?
+    `).all(reviewRequestId) as Array<{
+      work_item_id: string; reviewer_agent_id: string; review_slot_id: string;
+    }>;
+    for (const binding of bindings) {
+      const reviewWork = this.organization.getWorkItem(binding.work_item_id);
+      if (reviewWork.status === 'completed') continue;
+      new WorkIngressAuthority(this.database).completeWorkItem({
+        workItemId: reviewWork.id,
+        completedBy: binding.reviewer_agent_id,
+        summary: `Review Pool slot ${binding.review_slot_id} approved exact head ${headSha}`,
+        decisionRefs: [`review-request:${reviewRequestId}`, `review-slot:${binding.review_slot_id}`],
+      }, now);
+    }
+    this.database.db.prepare("UPDATE organization_review_work_items SET status='completed',updated_at=? WHERE review_request_id=? AND status='decided'")
+      .run(now, reviewRequestId);
+  }
+
   reconcileReviewDecision(reviewRequestId: string, now = Date.now()): Record<string, unknown> {
     const request = this.reviewPool.getRequest(required(reviewRequestId, 'Review request id'));
     if (request.status !== 'approved') return { reviewRequestId: request.id, status: request.status };
@@ -157,6 +178,12 @@ export class OrganizationWorkflowCoordinator {
       change.claimId,
       change.headSha,
     );
+    if (change.status === 'integrated') {
+      // A restart between Git promotion and WorkOutcome recording must not
+      // redo Git. Finish only the still-open Review WorkItems.
+      this.completeApprovedReviewWorks(request.id, change.headSha, now);
+      return { reviewRequestId: request.id, status: 'promoted', changeRequest: change };
+    }
     const slots = this.reviewPool.listSlots(request.id);
     const reviewer = slots.find((slot) => slot.reviewerAgentId)?.reviewerAgentId;
     if (!reviewer) throw new Error('Approved Review Request has no reviewer identity');
@@ -187,27 +214,7 @@ export class OrganizationWorkflowCoordinator {
       promotionId: decided.id, authoritySubject: 'system:release-governor',
     }, now) : decided;
     const integrated = this.changes.observeIntegration(prepared.id, now);
-    // Each approved Review Pool slot is a durable evidence-backed decision.
-    // Close its corresponding structured-result WorkItem via the existing
-    // WorkIngress authority, so Mission completion is not left hanging.
-    const bindings = this.database.db.prepare(`
-      SELECT work_item_id, reviewer_agent_id, review_slot_id
-      FROM organization_review_work_items WHERE review_request_id=?
-    `).all(request.id) as Array<{
-      work_item_id: string; reviewer_agent_id: string; review_slot_id: string;
-    }>;
-    for (const binding of bindings) {
-      const reviewWork = this.organization.getWorkItem(binding.work_item_id);
-      if (reviewWork.status === 'completed') continue;
-      new WorkIngressAuthority(this.database).completeWorkItem({
-        workItemId: reviewWork.id,
-        completedBy: binding.reviewer_agent_id,
-        summary: `Review Pool slot ${binding.review_slot_id} approved exact head ${current.headSha}`,
-        decisionRefs: [`review-request:${request.id}`, `review-slot:${binding.review_slot_id}`],
-      }, now);
-    }
-    this.database.db.prepare("UPDATE organization_review_work_items SET status='completed',updated_at=? WHERE review_request_id=? AND status='decided'")
-      .run(now, request.id);
+    this.completeApprovedReviewWorks(request.id, current.headSha, now);
     this.event(current.projectId, 'ORGANIZATION_WORK_PROMOTED', request.id, {
       reviewRequestId: request.id, changeRequestId: current.id, queueEntryId: prepared.id,
       promotionId: applied.id, integratedSha: integrated.integratedSha ?? null,
