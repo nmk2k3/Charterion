@@ -1,5 +1,6 @@
 import type { ControlPlane } from './controlPlane';
 import type { OrganizationWorkflowReconciliation } from './organizationWorkflowCoordinator';
+import { assertOrganizationReviewReady } from './organizationReviewGate';
 
 /**
  * Releases code review only after the final Tester WorkOutcome has been
@@ -43,6 +44,34 @@ export class OrganizationReviewRelease {
         claim.commitSha !== completion.commitSha || verification.claimId !== claim.id) {
       return { status: 'blocked', workItemId, organizationId: mission.organizationId,
         reason: 'Tester completion evidence identity mismatch' };
+    }
+    // A recovered or replayed success must not create a second review, even
+    // after the Change Request has already been integrated.
+    assertOrganizationReviewReady(this.plane.database, taskId, claim.id, completion.commitSha);
+    const existingChange = this.plane.changes.listChangeRequests(mission.projectId)
+      .find((change) => change.taskId === taskId &&
+        change.claimId === claim.id && change.headSha === completion.commitSha);
+    if (existingChange) {
+      const row = this.plane.database.db.prepare(`
+        SELECT id FROM review_requests
+        WHERE change_request_id=? AND revision=? AND lower(head_sha)=lower(?)
+      `).get(existingChange.id, existingChange.revision, completion.commitSha) as
+        { id?: string } | undefined;
+      if (row?.id) {
+        const required = this.plane.database.db.prepare(`
+          SELECT count(*) AS count FROM review_slots WHERE review_request_id=? AND required=1
+        `).get(row.id) as { count: number };
+        const bound = this.plane.database.db.prepare(`
+          SELECT count(*) AS count FROM organization_review_work_items WHERE review_request_id=?
+        `).get(row.id) as { count: number };
+        if (required.count > 0 && bound.count >= required.count) {
+          return {
+            status: 'review-ready', workItemId, organizationId: mission.organizationId,
+            changeRequest: existingChange,
+            reviewRequest: this.plane.reviewPool.getRequest(row.id),
+          };
+        }
+      }
     }
     return this.plane.organizationWorkflow.reconcileVerifiedWork(claim, verification, workspace, now);
   }
