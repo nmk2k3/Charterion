@@ -2,6 +2,7 @@ import { mapWithConcurrency } from './asyncPool';
 import { retainAttemptLedger } from './attemptLedger';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
 import { markReplyObserved, persistAttempt, readWorkState, replaceWorkState, serializeStateMutation, transitionAttempt, workState, type WorkState } from './backgroundWorkState';
+import { completeOrganizationWebPatch } from './organizationWebPatchCompletion';
 import { dispatchReadyManagedTasks } from './taskDispatchRuntime';
 import { hasOrganizationExecutionTask, markOrganizationExecutionObserved } from './organizationWorkAutomation';
 import { projectManagedTabs } from './managedTabProjection';
@@ -710,13 +711,43 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
       return false;
     }
     void reportSlotRuntime(tabId, message.observation, message.snapshot, bindingFor)
-      .then(async (binding) => { await reconcileGenerationReservation(tabId, binding, message.snapshot); const persisted = await markReplyObserved(message.attemptId, message.observation.contentEpoch, message.snapshot, tabId); if (persisted) await completeConversationRolloverForReply(binding, message.attemptId); return persisted; })
-      .then(async (persisted) => {
-        if (persisted) {
-          await notifyManagerChanged();
-          kickSupervisor();
-        }
+      .then(async (binding) => {
+        await reconcileGenerationReservation(tabId, binding, message.snapshot);
+        const persisted = await markReplyObserved(
+          message.attemptId, message.observation.contentEpoch, message.snapshot, tabId,
+        );
+        if (persisted) await completeConversationRolloverForReply(binding, message.attemptId);
+        return { persisted, binding };
+      })
+      .then(({ persisted, binding }) => {
+        // Acknowledge the durable reply before native testing (which can take
+        // up to 45 seconds). Model reply acknowledgement is NOT task completion.
         sendResponse({ ok: persisted });
+        if (!persisted) return;
+        void (async () => {
+          await notifyManagerChanged();
+          if (binding.agentSlotId) {
+            const state = await workState();
+            const attempt = state.attempts.find((item) => item.attemptId === message.attemptId);
+            const task = state.tasks.find((item) => item.id === attempt?.taskId);
+            if (attempt && task) {
+              const result = await completeOrganizationWebPatch({
+                attempt, task, tabId, slotId: binding.agentSlotId,
+                replyText: message.snapshot.latestAssistantText,
+              });
+              if (result.status === 'completed' || result.status === 'test-failed') {
+                await notifyManagerChanged();
+                scheduleFleetReconcile(0);
+              }
+            }
+          }
+          kickSupervisor();
+        })().catch((error) => {
+          void reportIncident('organization-web-patch-failed', message.attemptId, {
+            tabId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
     return true;
