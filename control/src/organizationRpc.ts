@@ -392,7 +392,7 @@ export class OrganizationRpcController {
   }
 
   private workComplete(request: RpcRequest, params: Params): unknown {
-    const completedBy = stringParam(params, 'completedBy')!;
+    let completedBy = stringParam(params, 'completedBy')!;
     const workItemId = stringParam(params, 'workItemId')!;
 
     const work = this.plane.organization.getWorkItem(workItemId);
@@ -413,11 +413,21 @@ export class OrganizationRpcController {
         { projectId: mission.projectId },
       );
 
-      if (grant.subject !== completedBy) {
+      const owner = work.ownerAgentId
+        ? this.plane.organization.getAgent(work.ownerAgentId)
+        : undefined;
+      if (!owner?.runtimeSlotId ||
+          grant.taskId !== `org-work-${workItemId}` ||
+          grant.agentSlotId !== grant.subject ||
+          grant.subject !== owner.runtimeSlotId ||
+          (completedBy !== owner.id && completedBy !== grant.subject)) {
         throw new Error(
-          'Capability subject does not match work completer',
+          'Work completion capability is not bound to this WorkItem owner',
         );
       }
+      // A scoped AgentSlot represents its owning Organization Agent.
+      // The untrusted request cannot impersonate a DRI or another owner.
+      completedBy = owner.id;
     }
 
     // 1. Commit the WorkOutcome first.
@@ -448,6 +458,22 @@ export class OrganizationRpcController {
       };
     }
 
+    // Release only after the outcome is durable and review release has
+    // inspected the exact-head Git evidence. A dirty worktree is preserved.
+    let workspaceRelease: { status: string; reason?: string } | undefined;
+    try {
+      const workspace = this.plane.workspaces.find(
+        mission.projectId, `org-work-${workItemId}`,
+      );
+      if (workspace?.status === 'active') this.plane.releaseTaskWorkspace(workspace.id);
+      workspaceRelease = { status: 'ok' };
+    } catch (error) {
+      workspaceRelease = {
+        status: 'deferred',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+
     // 2. Reconcile after completion is committed.
     // A reconciliation error must not make the
     // successful completion appear to have failed.
@@ -459,6 +485,7 @@ export class OrganizationRpcController {
       return {
         ...outcome,
         reviewRelease,
+        workspaceRelease,
         reconciliation: {
           status: 'ok',
           ...reconciliation,
