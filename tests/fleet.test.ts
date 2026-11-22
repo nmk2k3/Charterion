@@ -26,9 +26,8 @@ describe('agent fleet reconciliation', () => {
     expect(agentConversationUrl()).toBe('https://chatgpt.com/');
     expect(agentConversationUrl('conversation:abc/def')).toBe('https://chatgpt.com/c/abc%2Fdef');
     expect(agentConversationUrl('conversation:WEB:temporary')).toBe('https://chatgpt.com/');
-    expect(agentConversationUrl('conversation:local-chatgpt:7e49eef1-6681-4066-9c97-9a319783140e'))
-      .toBe('https://chatgpt.com/c/local-chatgpt%3A7e49eef1-6681-4066-9c97-9a319783140e');
-    expect(agentConversationUrl('conversation:LOCAL-CHATGPT:temporary')).toBe('https://chatgpt.com/c/LOCAL-CHATGPT%3Atemporary');
+    expect(agentConversationUrl('conversation:local-chatgpt:7e49eef1-6681-4066-9c97-9a319783140e')).toBeUndefined();
+    expect(agentConversationUrl('conversation:LOCAL-CHATGPT:temporary')).toBeUndefined();
     expect(agentConversationUrl('conversation:new')).toBe('https://chatgpt.com/');
     expect(planFleetReconciliation([agent()], [], {})).toEqual([
       { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/' },
@@ -36,9 +35,7 @@ describe('agent fleet reconciliation', () => {
     expect(planFleetReconciliation([agent({ conversationKey: 'conversation:abc' })], [], {})).toEqual([
       { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/c/abc' },
     ]);
-    expect(planFleetReconciliation([agent({ conversationKey: 'conversation:local-chatgpt:session' })], [], {})).toEqual([
-      { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/c/local-chatgpt%3Asession' },
-    ]);
+    expect(planFleetReconciliation([agent({ conversationKey: 'conversation:local-chatgpt:session' })], [], {})).toEqual([]);
   });
 
   it('recovers the persistent Organization conversation instead of using a mismatched mapped tab', () => {
@@ -47,9 +44,9 @@ describe('agent fleet reconciliation', () => {
     const wrong = tab(20, 'conversation:new-chat');
 
     expect(filterFleetTaskTabs([wrong], [slot], { 'slot-1': 20 })).toEqual([]);
-    expect(planFleetReconciliation([slot], [wrong], { 'slot-1': 20 })).toEqual([
-      { kind: 'open', slotId: 'slot-1', url: agentConversationUrl(previous) },
-    ]);
+    // Legacy aliases must be corrected by an admin; opening a fake /c/ URL
+    // would create an unrelated session and perpetuate the Kernel conflict.
+    expect(planFleetReconciliation([slot], [wrong], { 'slot-1': 20 })).toEqual([]);
 
     const correct = tab(21, previous);
     expect(planFleetReconciliation([slot], [wrong, correct], { 'slot-1': 20 })).toEqual([
