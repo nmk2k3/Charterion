@@ -28,8 +28,8 @@ async function main(): Promise<void> {
     for (const project of plane.listProjects().filter((item) => item.status === 'active')) {
       try {
         const result = scheduler.tick(project.id);
-        if (result.retryCreated.length || result.exhausted.length || result.reviewReleased.length || result.projectedTaskIds.length) {
-          console.error(`gamd autonomy project=${project.id} retries=${result.retryCreated.length} exhausted=${result.exhausted.length} reviews=${result.reviewReleased.length} projected=${result.projectedTaskIds.length}`);
+        if (result.retryCreated.length || result.exhausted.length || result.reviewReleased.length || result.promotedReviews.length || result.projectedTaskIds.length) {
+          console.error(`gamd autonomy project=${project.id} retries=${result.retryCreated.length} exhausted=${result.exhausted.length} reviews=${result.reviewReleased.length} promoted=${result.promotedReviews.length} projected=${result.projectedTaskIds.length}`);
         }
       } catch (error) {
         console.error('gamd autonomy tick failed', project.id, error);
