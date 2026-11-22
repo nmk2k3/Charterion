@@ -31,6 +31,8 @@ internal static class NativeRpcProtocol
         "lease.list",
         "events.list",
         "org-work.project-execution",
+        "org-web-patch.apply",
+        "org-web-patch.preview",
         "work.snapshot",
         "work.replace",
         "work.mutate",
