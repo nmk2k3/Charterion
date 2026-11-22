@@ -8,6 +8,7 @@ import type { ReviewDecision } from './reviewPoolContracts';
 import { OrganizationWorkReconciler } from './organizationWorkReconciler';
 import { OrganizationTestRunner } from './organizationTestRunner';
 import { OrganizationRetryController } from './organizationRetryController';
+import { OrganizationReviewRelease } from './organizationReviewRelease';
 
 type Params = Record<string, unknown>;
 export interface OrganizationRpcAuth {
@@ -60,6 +61,7 @@ const METHODS = new Set([
   'org-test.latest',
   'org-retry.request',
   'org-retry.list',
+  'org-review.release',
 ]);
 
 export class OrganizationRpcController {
@@ -192,6 +194,11 @@ export class OrganizationRpcController {
         }
       }
 
+      case 'org-review.release': {
+        this.auth.requireAdmin(request);
+        return new OrganizationReviewRelease(this.plane)
+          .reconcile(stringParam(params, 'workItemId')!);
+      }
       case 'org-retry.list': {
         this.auth.requireAdmin(request);
 
@@ -421,6 +428,19 @@ export class OrganizationRpcController {
       return outcome;
     }
 
+    // Review release is a separate, replayable post-commit action.
+    // Never roll back a verified WorkOutcome because review provisioning fails.
+    let reviewRelease: unknown;
+    try {
+      reviewRelease = new OrganizationReviewRelease(this.plane)
+        .reconcile(workItemId);
+    } catch (error) {
+      reviewRelease = {
+        status: 'blocked',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+
     // 2. Reconcile after completion is committed.
     // A reconciliation error must not make the
     // successful completion appear to have failed.
@@ -431,6 +451,7 @@ export class OrganizationRpcController {
 
       return {
         ...outcome,
+        reviewRelease,
         reconciliation: {
           status: 'ok',
           ...reconciliation,
@@ -439,6 +460,7 @@ export class OrganizationRpcController {
     } catch (error) {
       return {
         ...outcome,
+        reviewRelease,
         reconciliation: {
           status: 'failed',
           error:
