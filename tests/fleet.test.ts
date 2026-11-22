@@ -26,8 +26,9 @@ describe('agent fleet reconciliation', () => {
     expect(agentConversationUrl()).toBe('https://chatgpt.com/');
     expect(agentConversationUrl('conversation:abc/def')).toBe('https://chatgpt.com/c/abc%2Fdef');
     expect(agentConversationUrl('conversation:WEB:temporary')).toBe('https://chatgpt.com/');
-    expect(agentConversationUrl('conversation:local-chatgpt:7e49eef1-6681-4066-9c97-9a319783140e')).toBe('https://chatgpt.com/');
-    expect(agentConversationUrl('conversation:LOCAL-CHATGPT:temporary')).toBe('https://chatgpt.com/');
+    expect(agentConversationUrl('conversation:local-chatgpt:7e49eef1-6681-4066-9c97-9a319783140e'))
+      .toBe('https://chatgpt.com/c/local-chatgpt%3A7e49eef1-6681-4066-9c97-9a319783140e');
+    expect(agentConversationUrl('conversation:LOCAL-CHATGPT:temporary')).toBe('https://chatgpt.com/c/LOCAL-CHATGPT%3Atemporary');
     expect(agentConversationUrl('conversation:new')).toBe('https://chatgpt.com/');
     expect(planFleetReconciliation([agent()], [], {})).toEqual([
       { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/' },
@@ -36,7 +37,35 @@ describe('agent fleet reconciliation', () => {
       { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/c/abc' },
     ]);
     expect(planFleetReconciliation([agent({ conversationKey: 'conversation:local-chatgpt:session' })], [], {})).toEqual([
-      { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/' },
+      { kind: 'open', slotId: 'slot-1', url: 'https://chatgpt.com/c/local-chatgpt%3Asession' },
+    ]);
+  });
+
+  it('recovers the persistent Organization conversation instead of using a mismatched mapped tab', () => {
+    const previous = 'conversation:local-chatgpt:7e49eef1-6681-4066-9c97-9a319783140e';
+    const slot = agent({ conversationKey: previous, browserState: 'absent' });
+    const wrong = tab(20, 'conversation:new-chat');
+
+    expect(filterFleetTaskTabs([wrong], [slot], { 'slot-1': 20 })).toEqual([]);
+    expect(planFleetReconciliation([slot], [wrong], { 'slot-1': 20 })).toEqual([
+      { kind: 'open', slotId: 'slot-1', url: agentConversationUrl(previous) },
+    ]);
+
+    const correct = tab(21, previous);
+    expect(planFleetReconciliation([slot], [wrong, correct], { 'slot-1': 20 })).toEqual([
+      { kind: 'report-open', slotId: 'slot-1', tabId: 21, conversationKey: previous },
+    ]);
+    expect(filterFleetTaskTabs([wrong, correct], [slot], { 'slot-1': 20 })).toEqual([correct]);
+  });
+
+  it('refuses a mismatched reserved tab even when it has a valid lease', () => {
+    const slot = agent({
+      conversationKey: 'conversation:previous',
+      browserState: 'open', browserTabId: 20, browserLeaseId: 'lease-1', browserLeaseEpoch: 1,
+    });
+    const wrong = tab(20, 'conversation:new-chat', null);
+    expect(planFleetReconciliation([slot], [wrong], { 'slot-1': 20 })).toEqual([
+      { kind: 'report-absent', slotId: 'slot-1' },
     ]);
   });
 
