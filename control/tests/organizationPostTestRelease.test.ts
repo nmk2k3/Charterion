@@ -9,6 +9,7 @@ import { ControlPlane } from '../src/controlPlane';
 import { RpcRouter } from '../src/rpc';
 import { OrganizationTestRunner } from '../src/organizationTestRunner';
 import { OrganizationReviewRelease } from '../src/organizationReviewRelease';
+import { OrganizationWebReviewAuthority } from '../src/organizationWebReviewAuthority';
 import { assertOrganizationPromotionReady } from '../src/organizationReviewGate';
 
 const gitPath = process.env.GAM_GIT_PATH || 'git';
@@ -26,7 +27,11 @@ describe('post-Test organization review and promotion', () => {
     const repo = join(dir, 'repo');
     mkdirSync(join(repo, 'test'), { recursive: true });
     let db: ControlDatabase | undefined;
+    const priorWebReview = process.env.GAM_ALLOW_WEB_REVIEWS;
+    const priorAutoPromotion = process.env.GAM_ALLOW_WEB_PROMOTIONS;
     try {
+      process.env.GAM_ALLOW_WEB_REVIEWS = '1';
+      process.env.GAM_ALLOW_WEB_PROMOTIONS = '0';
       git(repo, 'init', '-b', 'main');
       git(repo, 'config', 'user.name', 'Charterion');
       git(repo, 'config', 'user.email', 'test@example.invalid');
@@ -144,20 +149,63 @@ describe('post-Test organization review and promotion', () => {
       expect(repeated.status).toBe('review-ready');
       expect(Number(db.db.prepare('SELECT count(*) AS n FROM review_requests').get()?.n)).toBe(1);
 
-      for (const slot of slots) {
-        const row = db.db.prepare(
-          'SELECT reviewer_agent_id FROM organization_review_work_items WHERE review_slot_id=?',
-        ).get(slot.id) as { reviewer_agent_id: string };
-        plane.reviewPool.claim({ slotId: slot.id, reviewerAgentId: row.reviewer_agent_id });
-        const decision = plane.reviewPool.decide({
-          slotId: slot.id, reviewerAgentId: row.reviewer_agent_id,
-          decision: 'approve', note: 'Evidence and exact SHA inspected',
+      const webReviewer = new OrganizationWebReviewAuthority(plane);
+      for (const [index, slot] of slots.entries()) {
+        const binding = db.db.prepare(
+          'SELECT reviewer_agent_id,work_item_id FROM organization_review_work_items WHERE review_slot_id=?',
+        ).get(slot.id) as { reviewer_agent_id: string; work_item_id: string };
+        const reviewer = plane.organization.getAgent(binding.reviewer_agent_id);
+        const reviewerSlotId = reviewer.runtimeSlotId!;
+        const profileId = `charterion-review-${reviewer.id}`;
+        const tabId = 500 + index;
+        plane.reportAgentBrowser({
+          slotId: reviewerSlotId, profileId, browserState: 'open', tabId,
+          observedAt: Date.now() + index,
         });
-        if (decision.request.status === 'approved') {
-          const promoted = plane.organizationWorkflow.reconcileReviewDecision(requestId);
-          expect(promoted.status).toBe('promoted');
-        }
+        const taskId = `org-work-${binding.work_item_id}`;
+        const reviewTask = plane.work.getTask(taskId)!;
+        const attemptId = `review-attempt-${index}`;
+        db.db.prepare('UPDATE manager_tasks SET document_json=?,updated_at=? WHERE id=?').run(
+          JSON.stringify({ ...reviewTask, attemptIds: [attemptId] }),
+          Date.now(), taskId,
+        );
+        db.db.prepare(
+          'INSERT INTO manager_attempts(id,position,document_json,updated_at) VALUES(?,?,?,?)',
+        ).run(attemptId, index, JSON.stringify({
+          attemptId, taskId, tabId, contentEpoch: 'test-epoch',
+          state: 'reply-observed',
+        }), Date.now());
+
+        const preview = webReviewer.preview({
+          projectId: project.id, taskId,
+          slotId: reviewerSlotId, tabId,
+        });
+        expect(preview.reviewSlotId).toBe(slot.id);
+        expect(preview.headSha).toBe(testProof.sha);
+        expect(preview.diffComplete).toBe(true);
+        expect(preview.diff.trim()).not.toBe('');
+
+        const decision = webReviewer.decide({
+          projectId: project.id, taskId,
+          slotId: reviewerSlotId, tabId, attemptId,
+          reviewSlotId: slot.id, headSha: testProof.sha,
+          decision: 'approve',
+          note: 'Inspected complete exact-head diff and passing test evidence',
+        });
+        expect(['decided','approved-awaiting-promotion']).toContain(decision.status);
+        expect(git(repo, 'rev-parse', 'refs/heads/main')).toBe(baseSha);
+        // The source attempt cannot be replayed with a new verdict.
+        expect(() => webReviewer.decide({
+          projectId: project.id, taskId,
+          slotId: reviewerSlotId, tabId, attemptId,
+          reviewSlotId: slot.id, headSha: testProof.sha,
+          decision: 'reject',
+          note: 'Altered reviewer decision should never overwrite the audit trail',
+        })).toThrow(/replay/);
       }
+      expect(plane.reviewPool.getRequest(requestId).status).toBe('approved');
+      const promoted = plane.organizationWorkflow.reconcileReviewDecision(requestId);
+      expect(promoted.status).toBe('promoted');
 
       expect(git(repo, 'rev-parse', 'refs/heads/main')).toBe(testProof.sha);
       expect(plane.organization.getMission(mission.id).status).toBe('completed');
@@ -166,6 +214,10 @@ describe('post-Test organization review and promotion', () => {
       ).get()?.n)).toBe(2);
     } finally {
       db?.close();
+      if (priorWebReview === undefined) delete process.env.GAM_ALLOW_WEB_REVIEWS;
+      else process.env.GAM_ALLOW_WEB_REVIEWS = priorWebReview;
+      if (priorAutoPromotion === undefined) delete process.env.GAM_ALLOW_WEB_PROMOTIONS;
+      else process.env.GAM_ALLOW_WEB_PROMOTIONS = priorAutoPromotion;
       rmSync(dir, { recursive: true, force: true });
     }
   }, 120000);
