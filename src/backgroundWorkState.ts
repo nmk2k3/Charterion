@@ -141,7 +141,10 @@ export async function markReplyObserved(attemptId: string, contentEpoch: string,
     if (current.state === 'reply-observed') return true;
     const advanced = advanceAttempt(current, 'reply-observed');
     if (advanced.state !== 'reply-observed') return false;
-    const next: SendAttemptRecord = { ...advanced, replyObservedAt: Date.now(), replyTextTail: snapshot.latestAssistantText.slice(-8000) };
+    // Persist the entire bounded ChatGPT Web patch block for restart recovery.
+    // Ordinary task replies keep the smaller historic limit.
+    const replyLimit = current.taskId?.startsWith('org-work-') ? 12_000 : 8_000;
+    const next: SendAttemptRecord = { ...advanced, replyObservedAt: Date.now(), replyTextTail: snapshot.latestAssistantText.slice(-replyLimit) };
     if (snapshot.latestAssistantMessageId) next.replyMessageId = snapshot.latestAssistantMessageId;
     await mutateNativeWorkDocument({ kind: 'attempt', expectedRevision: state.revision, document: next as unknown as Record<string, unknown> });
     return true;
