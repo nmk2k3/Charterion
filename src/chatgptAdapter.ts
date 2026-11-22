@@ -1,6 +1,6 @@
 import type { AgentStatus, ChatSnapshot, ObservationConfidence } from './contracts';
 
-export const CHATGPT_ADAPTER_VERSION = '2026-08-30.2';
+export const CHATGPT_ADAPTER_VERSION = '2026-11-22.1';
 
 const COMPOSER_SELECTORS = [
   // New ChatGPT app-shell variants use a ProseMirror editor with composer
@@ -113,7 +113,21 @@ export function isGenerating(doc: Document): boolean {
 }
 
 export function assistantMessages(doc: Document): HTMLElement[] {
-  return Array.from(doc.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]'));
+  const legacy = Array.from(doc.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]'));
+  if (legacy.length > 0) return legacy;
+
+  // ChatGPT's DIL response renderer no longer has data-message-author-role
+  // or conversation-turn-* wrappers. The response-body plus the assistant
+  // message identity is the minimal observed, role-scoped evidence. Never
+  // fall back to generic Markdown, editable surfaces or user message text.
+  return Array.from(doc.querySelectorAll<HTMLElement>('[data-response-body]')).filter((body) =>
+    isUsableElement(body) &&
+    !body.closest('[data-message-author-role="user"]') &&
+    Boolean(body.querySelector(
+      '[data-dil-response][data-dil-message-id], ' +
+      '[data-dil-source-message-id], [data-chatgpt-selection-message-id]',
+    )),
+  );
 }
 
 export function assistantMessageId(message: HTMLElement | undefined): string | undefined {
@@ -122,6 +136,15 @@ export function assistantMessageId(message: HTMLElement | undefined): string | u
   if (direct) return `message:${direct}`;
   const identifiedAncestor = message.closest<HTMLElement>('[data-message-id]');
   if (identifiedAncestor?.dataset.messageId) return `message:${identifiedAncestor.dataset.messageId}`;
+  const dil = message.querySelector<HTMLElement>('[data-dil-response][data-dil-message-id]');
+  const dilId = dil?.getAttribute('data-dil-message-id');
+  if (dilId) return `message:${dilId}`;
+  const selection = message.querySelector<HTMLElement>('[data-chatgpt-selection-message-id]');
+  const selectedId = selection?.getAttribute('data-chatgpt-selection-message-id');
+  if (selectedId) return `message:${selectedId}`;
+  const sourced = message.querySelector<HTMLElement>('[data-dil-source-message-id]');
+  const sourceId = sourced?.getAttribute('data-dil-source-message-id');
+  if (sourceId) return `message:${sourceId}`;
   const turn = message.closest<HTMLElement>('[data-testid^="conversation-turn-"], [data-turn-id]');
   const turnId = turn?.getAttribute('data-turn-id') ?? turn?.getAttribute('data-testid');
   return turnId ? `turn:${turnId}` : undefined;
