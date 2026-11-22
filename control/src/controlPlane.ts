@@ -18,6 +18,7 @@ import { OrganizationExecutionBridge } from './organizationExecutionBridge';
 import { OrganizationRuntimeAcquisitionAuthority } from './organizationRuntimeAcquisitionAuthority';
 import { AutonomousIntakeAuthority } from './autonomousIntakeAuthority';
 import { OrganizationWorkflowCoordinator } from './organizationWorkflowCoordinator';
+import { OrganizationTestRunner } from './organizationTestRunner';
 import { parseJsonRecord, parseJsonStringArray } from './persistenceCodec';
 import { planElasticFleet, type ElasticFleetDecision } from './elasticFleet';
 import { projectRootIdentity } from './projectIdentity';
@@ -497,6 +498,22 @@ export class ControlPlane {
       if (!workspace || workspace.status !== 'active') throw new Error('Verified-claim task has no active durable TaskWorkspace');
       if (!claim.commitSha || workspace.resourceId !== claim.resourceId || workspace.leaseId !== claim.leaseId || workspace.leaseEpoch !== claim.leaseEpoch || workspace.slotId !== claim.subject) {
         throw new Error('Verified claim does not match the task workspace authority');
+      }
+      if (claim.taskId.startsWith('org-work-') && task?.targetRole === 'Tester') {
+        // A Git-valid claim is not a test-valid result. Keep the Tester
+        // workspace and retry authority active until exact-head tests PASS.
+        const workItemId = claim.taskId.slice('org-work-'.length);
+        const test = new OrganizationTestRunner(this).latest(claim.projectId, workItemId);
+        if (!test || test.status !== 'passed' || test.suite !== 'node:test' ||
+            test.exitCode !== 0 || test.error || test.workspaceId !== workspace.id ||
+            test.commitSha !== claim.commitSha || test.taskId !== claim.taskId ||
+            test.projectId !== claim.projectId || test.workItemId !== workItemId) {
+          this.event(claim.projectId, 'ORG_TEST_FINALIZATION_BLOCKED', claim.taskId, {
+            claimId: claim.id, testedCommitSha: test?.commitSha ?? null,
+            testStatus: test?.status ?? 'missing', verifiedCommitSha: claim.commitSha,
+          }, now);
+          return { ...verification, machineCompletionBlocked: 'Tester needs a passing test result for the exact verified commit' };
+        }
       }
       this.work.completeVerifiedClaim({ taskId: claim.taskId, claimId: claim.id, verificationId: verification.id, commitSha: claim.commitSha }, verification.completedAt);
       if (claim.taskId.startsWith('org-work-')) {
