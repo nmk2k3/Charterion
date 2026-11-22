@@ -123,9 +123,41 @@ export class RpcRouter {
   private dispatch(request: RpcRequest): unknown {
     const params = request.params ? record(request.params) : {};
     switch (request.method) {
-      case 'control.snapshot':
+      case 'control.snapshot': {
         this.requireBrowserOrAdmin(request);
-        const changeRequests = this.plane.changes.listChangeRequests().slice(-200); return { protocolVersion: 2, projects: this.plane.listProjects(), agents: this.plane.listAgentSlots(), resources: this.plane.listResources(), leases: this.plane.listLeases(), claims: this.plane.evidence.listClaims().slice(-200), artifacts: this.plane.evidence.listArtifacts().slice(-200), verifications: this.plane.evidence.listVerifications().slice(-200), changeRequests, reviews: changeRequests.flatMap((item) => this.plane.changes.listReviews(item.id)).slice(-200), mergeQueue: this.plane.changes.listQueue().slice(-200), workerRequests: this.plane.requests.list().slice(-200), promotions: this.plane.promotions.list().slice(-200), browserRuntime: this.plane.listBrowserRuntime(), events: this.plane.listEvents(undefined, 0, 200) };
+        // Browser runtime uses one physical Edge/Chrome profile. Organization
+        // workspaces keep distinct, Kernel-owned logical browser identities.
+        // Only expose ready, bound workspace profiles for exact AgentSlots.
+        const workspaceProfiles = new Map<string, string>();
+        for (const agent of this.plane.organization.listAgents()) {
+          if (!agent.runtimeSlotId) continue;
+          const workspace = this.plane.organization.activeAgentWorkspace(agent.id);
+          if (workspace?.status === 'ready' && workspace.browserProfileId) {
+            workspaceProfiles.set(agent.runtimeSlotId, workspace.browserProfileId);
+          }
+        }
+        const agents = this.plane.listAgentSlots().map((agent) => ({
+          ...agent,
+          ...(workspaceProfiles.has(agent.id)
+            ? { workspaceBrowserProfileId: workspaceProfiles.get(agent.id)! }
+            : {}),
+        }));
+        const changeRequests = this.plane.changes.listChangeRequests().slice(-200);
+        return {
+          protocolVersion: 2, projects: this.plane.listProjects(), agents,
+          resources: this.plane.listResources(), leases: this.plane.listLeases(),
+          claims: this.plane.evidence.listClaims().slice(-200),
+          artifacts: this.plane.evidence.listArtifacts().slice(-200),
+          verifications: this.plane.evidence.listVerifications().slice(-200),
+          changeRequests,
+          reviews: changeRequests.flatMap((item) => this.plane.changes.listReviews(item.id)).slice(-200),
+          mergeQueue: this.plane.changes.listQueue().slice(-200),
+          workerRequests: this.plane.requests.list().slice(-200),
+          promotions: this.plane.promotions.list().slice(-200),
+          browserRuntime: this.plane.listBrowserRuntime(),
+          events: this.plane.listEvents(undefined, 0, 200),
+        };
+      }
       case 'browser.report': return this.browserReport(request, params);
       case 'browser.status': this.requireBrowserOrAdmin(request); return this.plane.listBrowserRuntime();
       case 'project.create': return this.projectCreate(request, params);
