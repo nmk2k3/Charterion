@@ -164,6 +164,20 @@ describe('verified claim completion', () => {
     expect(deriveManagedTasks([retried], [noPatch])[0]?.status).toBe('ready');
   });
 
+  it('keeps V2 protocol proposals pending Kernel verification rather than allowing duplicate retry', () => {
+    const org = {
+      ...task('org-work-pilot', [], ['attempt-pilot']),
+      completionPolicy: 'verified-claim' as const,
+      organizationWorkItemId: 'work-pilot',
+    };
+    const proposal = {
+      ...attempt('attempt-pilot', 'reply-observed'),
+      replyTextTail: 'CHARTERION_PATCH_V2_BEGIN\n{"taskId":"org-work-pilot"}\nCHARTERION_PATCH_V2_END',
+    };
+    expect(deriveManagedTasks([org], [proposal])[0]?.status).toBe('running');
+    expect(isRetryableTaskAttempt(org, proposal)).toBe(false);
+  });
+
   it('does not retry a validly enveloped proposal or a verified machine completion', () => {
     const org = {
       ...task('org-work-pilot', [], ['attempt-pilot']),
