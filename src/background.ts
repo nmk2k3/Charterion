@@ -2,8 +2,7 @@ import { mapWithConcurrency } from './asyncPool';
 import { retainAttemptLedger } from './attemptLedger';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
 import { markReplyObserved, persistAttempt, readWorkState, replaceWorkState, serializeStateMutation, transitionAttempt, workState, type WorkState } from './backgroundWorkState';
-import { completeOrganizationWebPatch } from './organizationWebPatchCompletion';
-import { completeOrganizationWebReview } from './organizationWebReviewCompletion';
+import { processObservedOrganizationWebReply, recoverOrganizationWebReplies } from './organizationWebReplyLifecycle';
 import { dispatchReadyManagedTasks } from './taskDispatchRuntime';
 import { hasOrganizationExecutionTask, markOrganizationExecutionObserved } from './organizationWorkAutomation';
 import { projectManagedTabs } from './managedTabProjection';
@@ -95,50 +94,6 @@ async function reconcileAfterRestart(): Promise<void> {
     const attempts = applyRestartRecovery(current, active, observations);
     if (attempts) await replaceWorkState(current, { attempts });
   });
-}
-
-/**
- * Recover a web patch only from a durable reply-observed attempt, not from
- * a model's new free-form message. Kernel replay and source-SHA fences are
- * authoritative; an interrupted filesystem write remains manual recovery.
- */
-async function reconcileWebPatchesAfterRestart(): Promise<void> {
-  const state = await workState();
-  const candidates = state.attempts.filter((attempt) =>
-    attempt.state === 'reply-observed' && attempt.taskId?.startsWith('org-work-') &&
-    (attempt.replyTextTail?.includes('<<<CHARTERION_PATCH_V1>>>') ||
-      attempt.replyTextTail?.includes('<<<CHARTERION_REVIEW_V1>>>'))
-  );
-  if (candidates.length === 0) return;
-  const tabs = await managedTabs(state.attempts);
-  for (const attempt of candidates) {
-    const tab = tabs.find((candidate) =>
-      candidate.tabId === attempt.tabId && Boolean(candidate.binding.agentSlotId)
-    );
-    if (!tab?.binding.agentSlotId) continue;
-    const task = state.tasks.find((item) => item.id === attempt.taskId);
-    if (!task || task.machineCompletion || task.cancelledAt) continue;
-    try {
-      const result = await completeOrganizationWebPatch({
-        attempt, task, tabId: tab.tabId, slotId: tab.binding.agentSlotId,
-        replyText: attempt.replyTextTail ?? '',
-      });
-      const review = await completeOrganizationWebReview({
-        attempt, task, tabId: tab.tabId, slotId: tab.binding.agentSlotId,
-        replyText: attempt.replyTextTail ?? '',
-      });
-      if (result.status === 'completed' || result.status === 'test-failed' ||
-          review.status === 'decided') {
-        await notifyManagerChanged();
-        scheduleFleetReconcile(0);
-      }
-    } catch (error) {
-      void reportIncident('organization-web-patch-recovery-blocked', attempt.attemptId, {
-        tabId: attempt.tabId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
 }
 
 async function bindingFor(tabId: number, snapshot: ChatSnapshot): Promise<RoleBinding> {
@@ -771,26 +726,15 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
         if (!persisted) return;
         void (async () => {
           await notifyManagerChanged();
-          if (binding.agentSlotId) {
-            const state = await workState();
-            const attempt = state.attempts.find((item) => item.attemptId === message.attemptId);
-            const task = state.tasks.find((item) => item.id === attempt?.taskId);
-            if (attempt && task) {
-              const result = await completeOrganizationWebPatch({
-                attempt, task, tabId, slotId: binding.agentSlotId,
-                replyText: message.snapshot.latestAssistantText,
-              });
-              const review = await completeOrganizationWebReview({
-                attempt, task, tabId, slotId: binding.agentSlotId,
-                replyText: message.snapshot.latestAssistantText,
-              });
-              if (result.status === 'completed' || result.status === 'test-failed' ||
-                  review.status === 'decided') {
-                await notifyManagerChanged();
-                scheduleFleetReconcile(0);
-              }
-            }
-          }
+          await processObservedOrganizationWebReply({
+            attemptId: message.attemptId,
+            tabId,
+            slotId: binding.agentSlotId,
+            replyText: message.snapshot.latestAssistantText,
+          }, async () => {
+            await notifyManagerChanged();
+            scheduleFleetReconcile(0);
+          });
           kickSupervisor();
         })().catch((error) => {
           void reportIncident('organization-web-patch-failed', message.attemptId, {
@@ -948,7 +892,19 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 void migrateLegacyWorkStateOnce().then(() => reconcileAfterRestart()).then(() => {
-  void reconcileWebPatchesAfterRestart().catch((error) =>
+  void recoverOrganizationWebReplies({
+    managedTabs,
+    onChanged: async () => {
+      await notifyManagerChanged();
+      scheduleFleetReconcile(0);
+    },
+    onBlocked: (attempt, error) => {
+      void reportIncident('organization-web-patch-recovery-blocked', attempt.attemptId, {
+        tabId: attempt.tabId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  }).catch((error) =>
     reportIncident('organization-web-patch-recovery-failed', 'service-worker', {
       error: error instanceof Error ? error.message : String(error),
     }));
