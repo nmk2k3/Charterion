@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { recoverAttempt, type AttemptRecoveryObservation } from '../src/recovery';
+import { canRecoverAcknowledgedReplyAcrossEpochs, recoverAttempt, type AttemptRecoveryObservation } from '../src/recovery';
 import type { ChatSnapshot, SendAttemptRecord } from '../src/contracts';
 
 function attempt(state: SendAttemptRecord['state']): SendAttemptRecord {
@@ -91,6 +91,92 @@ describe('restart attempt recovery', () => {
   it('never auto-retries terminal or already-uncertain states', () => {
     for (const state of ['failed', 'reply-observed', 'uncertain'] as const) {
       expect(recoverAttempt(attempt(state), observation())).toEqual({ attemptId: 'attempt-1' });
+    }
+  });
+});
+
+describe('cross-epoch acknowledged Organization reply recovery', () => {
+  function crossEpoch(): { record: SendAttemptRecord; evidence: AttemptRecoveryObservation } {
+    const record: SendAttemptRecord = {
+      ...attempt('acknowledged'),
+      taskId: 'org-work-pilot',
+      conversationKey: 'provisional:content-epoch',
+    };
+    const observed = observation();
+    observed.state.observation.contentEpoch = 'new-content-epoch';
+    observed.state.snapshot = {
+      ...snapshot(),
+      conversationKey: 'conversation:assigned-after-send',
+      conversationId: 'assigned-after-send',
+      assistantMessageCount: 3,
+      latestAssistantMessageId: 'message:m3',
+      latestAssistantText: 'Patch proposal',
+    };
+    observed.state.pendingAttempt = {
+      attemptId: record.attemptId, contentEpoch: record.contentEpoch,
+      baselineAssistantMessageCount: record.baselineAssistantMessageCount,
+      baselineAssistantMessageId: record.baselineAssistantMessageId,
+      startedAt: 1500,
+    };
+    return { record, evidence: observed };
+  }
+
+  it('accepts a new assistant reply with matching old pending, delivery, tab and baseline', () => {
+    const { record, evidence } = crossEpoch();
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(true);
+  });
+
+  it('rejects tab and delivery mismatch, even with a visible assistant reply', () => {
+    const { record, evidence } = crossEpoch();
+    evidence.tabId = 8;
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+    evidence.tabId = 7;
+    evidence.state.deliveredAttemptIds = [];
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+  });
+
+  it('rejects wrong pending identity, original epoch and correlation baseline', () => {
+    const { record, evidence } = crossEpoch();
+    evidence.state.pendingAttempt!.attemptId = 'another-attempt';
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+    evidence.state.pendingAttempt!.attemptId = record.attemptId;
+    evidence.state.pendingAttempt!.contentEpoch = 'forged-old-epoch';
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+    evidence.state.pendingAttempt!.contentEpoch = record.contentEpoch;
+    evidence.state.pendingAttempt!.baselineAssistantMessageCount = 99;
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+  });
+
+  it('requires a new completed directly observed assistant reply', () => {
+    const { record, evidence } = crossEpoch();
+    evidence.state.snapshot.assistantMessageCount = 2;
+    evidence.state.snapshot.latestAssistantMessageId = 'message:m2';
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+    evidence.state.snapshot.assistantMessageCount = 3;
+    evidence.state.snapshot.latestAssistantMessageId = 'message:m3';
+    evidence.state.snapshot.status = 'generating';
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+    evidence.state.snapshot.status = 'idle';
+    evidence.state.snapshot.confidence = 'unknown';
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+  });
+
+  it('rejects different canonical conversation or arbitrary provisional records', () => {
+    const { record, evidence } = crossEpoch();
+    record.conversationKey = 'conversation:other';
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+    record.conversationKey = 'provisional:unrelated';
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+    record.conversationKey = 'provisional:content-epoch';
+    evidence.state.snapshot.url = 'https://example.com/c/assigned-after-send';
+    expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
+  });
+
+  it('refuses failed, uncertain and already-completed attempts', () => {
+    const { record, evidence } = crossEpoch();
+    for (const state of ['uncertain', 'failed', 'reply-observed'] as const) {
+      record.state = state;
+      expect(canRecoverAcknowledgedReplyAcrossEpochs(record, evidence)).toBe(false);
     }
   });
 });
