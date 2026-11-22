@@ -3,6 +3,7 @@ import { retainAttemptLedger } from './attemptLedger';
 import { deriveManagedTasks, isRetryableTaskAttempt, validateTaskGraph } from './taskGraph';
 import { markReplyObserved, persistAttempt, readWorkState, replaceWorkState, serializeStateMutation, transitionAttempt, workState, type WorkState } from './backgroundWorkState';
 import { completeOrganizationWebPatch } from './organizationWebPatchCompletion';
+import { completeOrganizationWebReview } from './organizationWebReviewCompletion';
 import { dispatchReadyManagedTasks } from './taskDispatchRuntime';
 import { hasOrganizationExecutionTask, markOrganizationExecutionObserved } from './organizationWorkAutomation';
 import { projectManagedTabs } from './managedTabProjection';
@@ -105,7 +106,8 @@ async function reconcileWebPatchesAfterRestart(): Promise<void> {
   const state = await workState();
   const candidates = state.attempts.filter((attempt) =>
     attempt.state === 'reply-observed' && attempt.taskId?.startsWith('org-work-') &&
-    attempt.replyTextTail?.includes('<<<CHARTERION_PATCH_V1>>>')
+    (attempt.replyTextTail?.includes('<<<CHARTERION_PATCH_V1>>>') ||
+      attempt.replyTextTail?.includes('<<<CHARTERION_REVIEW_V1>>>'))
   );
   if (candidates.length === 0) return;
   const tabs = await managedTabs(state.attempts);
@@ -121,7 +123,12 @@ async function reconcileWebPatchesAfterRestart(): Promise<void> {
         attempt, task, tabId: tab.tabId, slotId: tab.binding.agentSlotId,
         replyText: attempt.replyTextTail ?? '',
       });
-      if (result.status === 'completed' || result.status === 'test-failed') {
+      const review = await completeOrganizationWebReview({
+        attempt, task, tabId: tab.tabId, slotId: tab.binding.agentSlotId,
+        replyText: attempt.replyTextTail ?? '',
+      });
+      if (result.status === 'completed' || result.status === 'test-failed' ||
+          review.status === 'decided') {
         await notifyManagerChanged();
         scheduleFleetReconcile(0);
       }
@@ -773,7 +780,12 @@ chrome.runtime.onMessage.addListener((message: ManagerRequest | RuntimeNotice, s
                 attempt, task, tabId, slotId: binding.agentSlotId,
                 replyText: message.snapshot.latestAssistantText,
               });
-              if (result.status === 'completed' || result.status === 'test-failed') {
+              const review = await completeOrganizationWebReview({
+                attempt, task, tabId, slotId: binding.agentSlotId,
+                replyText: message.snapshot.latestAssistantText,
+              });
+              if (result.status === 'completed' || result.status === 'test-failed' ||
+                  review.status === 'decided') {
                 await notifyManagerChanged();
                 scheduleFleetReconcile(0);
               }
