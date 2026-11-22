@@ -97,7 +97,16 @@ describe('admin-only repair of legacy local-chatgpt identity', () => {
     configureWorkspace(plane, agent.id, 5);
     plane.organization.bindRuntimeSlot(agent.id, slot.id, 6);
     plane.bindAgentConversation(slot.id, alias, 7);
-    const task = { id: 'org-work-pilot', project: 'Pilot', targetRole: 'Developer', completionPolicy: 'verified-claim', organizationWorkItemId: 'pilot' };
+    const mission = plane.organization.createMission({
+      organizationId: org.id, projectId: project.id, title: 'Pilot mission',
+      objective: 'Preserve Developer conversation continuity', driAgentId: agent.id,
+    }, 8);
+    plane.organization.setMissionStatus(mission.id, 'active', 9);
+    const work = plane.organization.createWorkItem({
+      missionId: mission.id, title: 'Greeting repair', objective: 'Return uppercase greeting',
+      ownerAgentId: agent.id,
+    }, 10);
+    const task = { id: `org-work-${work.id}`, project: 'Pilot', targetRole: 'Developer', completionPolicy: 'verified-claim', organizationWorkItemId: work.id };
     const attempt = { attemptId: 'attempt-2', taskId: task.id, conversationKey: alias, tabId: 42, state: 'reply-observed', replyObservedAt: 11 };
     plane.database.db.prepare('INSERT INTO manager_tasks(id,position,document_json,updated_at) VALUES(?,?,?,?)')
       .run(task.id, 0, JSON.stringify(task), 11);
