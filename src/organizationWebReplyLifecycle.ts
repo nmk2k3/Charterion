@@ -1,5 +1,6 @@
 import { workState } from './backgroundWorkState';
 import { completeOrganizationWebPatch } from './organizationWebPatchCompletion';
+import { hasWebPatchMarkers } from './organizationWebPatchProtocol';
 import { completeOrganizationWebReview } from './organizationWebReviewCompletion';
 import type { ManagedTab, SendAttemptRecord } from './contracts';
 
@@ -53,7 +54,7 @@ export async function recoverOrganizationWebReplies(
   const candidates = state.attempts.filter((attempt) =>
     attempt.state === 'reply-observed' &&
     attempt.taskId?.startsWith('org-work-') &&
-    (attempt.replyTextTail?.includes('<<<CHARTERION_PATCH_V1>>>') ||
+    (hasWebPatchMarkers(attempt.replyTextTail ?? '') ||
       attempt.replyTextTail?.includes('<<<CHARTERION_REVIEW_V1>>>')),
   );
   if (candidates.length === 0) return;
