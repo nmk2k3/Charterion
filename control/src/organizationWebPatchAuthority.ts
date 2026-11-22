@@ -152,7 +152,7 @@ export class OrganizationWebPatchAuthority {
         if (entry.isDirectory()) {
           if (depth < 3) walk(join(directory, entry.name), safe, depth + 1);
         } else if (entry.isFile() &&
-          /\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py)$/i.test(entry.name) &&
+          /\.(?:ts|tsx|js|jsx|mjs|cjs|py)$/i.test(entry.name) &&
           !/^(?:package-lock|yarn\.lock|pnpm-lock)\./i.test(entry.name)) {
           candidates.push(safe);
         }
@@ -167,6 +167,7 @@ export class OrganizationWebPatchAuthority {
     const files: WebPatchFile[] = [];
     for (const path of candidates) {
       if (remaining < 120 || files.length >= 16) break;
+      if (/(?:credential|secret|token|password|private[-_.]?key)/i.test(path)) continue;
       const file = fileInside(workspace.path, path);
       const content = readFileSync(file, 'utf8');
       if (content.length > 3500 || content.includes('\0')) continue;
