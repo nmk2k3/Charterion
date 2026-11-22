@@ -280,7 +280,7 @@ export function assertOrganizationPromotionReady(
   const change = db.prepare(`
     SELECT id,revision,status FROM change_requests
     WHERE project_id=? AND task_id=? AND claim_id=? AND lower(head_sha)=lower(?)
-      AND status IN ('approved','integrated')
+      AND status IN ('approved','queued','integrated')
     ORDER BY updated_at DESC,id DESC LIMIT 1
   `).get(projectId, claim.task_id, claimId, headSha) as
     { id: string; revision: number; status: string } | undefined;
