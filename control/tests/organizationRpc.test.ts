@@ -51,6 +51,20 @@ describe('organization and external work ingress RPC', () => {
     const workItemId = workItem.id;
     expect(workItem.completionPolicy).toBe('structured-result');
 
+    // A similarly scoped token from the external requester is not an
+    // Organization WorkItem owner capability.
+    const impersonator = h.plane.issueCapability({
+      subject: 'external-ai:planner',
+      projectId: project.id,
+      scopes: ['work:complete'],
+      ttlMs: 60_000,
+    });
+    const rejected = h.router.handle({ id: 'impersonate', method: 'org-work.complete', auth: { capabilityToken: impersonator.token }, params: {
+      workItemId, completedBy: agent.id, summary: 'Forged completion',
+    } });
+    expect(rejected.ok).toBe(false);
+    expect(h.plane.ingress.getOutcome(workItemId)).toBeUndefined();
+
     const worker = h.plane.issueCapability({ subject: agent.id, projectId: project.id, scopes: ['work:complete'], ttlMs: 60_000 });
     const completed = h.router.handle({ id: 'complete', method: 'org-work.complete', auth: { capabilityToken: worker.token }, params: {
       workItemId, completedBy: agent.id, summary: 'Finished with direct tools', producedRefs: ['file:E:/shared/report.pdf'],
