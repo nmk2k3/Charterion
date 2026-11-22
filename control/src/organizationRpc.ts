@@ -501,17 +501,31 @@ export class OrganizationRpcController {
       const owner = work.ownerAgentId
         ? this.plane.organization.getAgent(work.ownerAgentId)
         : undefined;
-      if (!owner?.runtimeSlotId ||
-          grant.taskId !== `org-work-${workItemId}` ||
-          grant.agentSlotId !== grant.subject ||
-          grant.subject !== owner.runtimeSlotId ||
-          (completedBy !== owner.id && completedBy !== grant.subject)) {
-        throw new Error(
-          'Work completion capability is not bound to this WorkItem owner',
-        );
+      if (!owner || owner.status !== 'active') {
+        throw new Error('Work completion requires an active assigned owner');
       }
-      // A scoped AgentSlot represents its owning Organization Agent.
-      // The untrusted request cannot impersonate a DRI or another owner.
+      if (owner.runtimeSlotId) {
+        // Executable Organization Work requires the exact provisioned
+        // AgentSlot/worktree capability. A broad agent capability cannot
+        // bypass verified-claim authority or impersonate another Worker.
+        if (grant.taskId !== `org-work-${workItemId}` ||
+            grant.agentSlotId !== owner.runtimeSlotId ||
+            grant.subject !== owner.runtimeSlotId ||
+            (completedBy !== owner.id && completedBy !== owner.runtimeSlotId)) {
+          throw new Error('Work completion capability is not bound to this WorkItem owner');
+        }
+      } else {
+        // External/direct-tool work may have no browser runtime. Preserve
+        // the historical owner-scoped completion path for structured
+        // outcomes only; never admit it for verified Git claims.
+        if (work.completionPolicy !== 'structured-result' ||
+            grant.subject !== owner.id ||
+            grant.agentSlotId !== undefined ||
+            grant.taskId !== undefined ||
+            completedBy !== owner.id) {
+          throw new Error('Direct-tool work completion requires an owner-scoped structured-result capability');
+        }
+      }
       completedBy = owner.id;
     }
 
