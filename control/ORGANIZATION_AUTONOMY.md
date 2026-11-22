@@ -33,7 +33,16 @@ It does **not** assume an AI text reply is execution evidence.
 ## Windows operator setup
 
 Build the extension, native host and control plane using the project's normal
-Windows setup instructions. Set the environment below **before launching gamd**:
+Windows setup instructions. Each Organization Agent workspace must have its own
+unique `browserProfileId` (for example `browser-${agent.id}`); the database
+deliberately rejects two live Agent workspaces sharing the same value. This is
+a **Kernel logical workspace identity**; it is not the physical Chromium
+profile identifier `gam-default` reported by `browser.report`. The extension
+obtains each AgentSlot's configured workspace profile from the authenticated
+Kernel snapshot when reporting Agent browser/runtime evidence. Do not set all
+Agent workspaces to `gam-default` or remove the unique workspace constraint.
+
+Set the environment below **before launching gamd**:
 
 ```powershell
 # Default: Kernel scheduler active. Disable explicitly for diagnostics.
