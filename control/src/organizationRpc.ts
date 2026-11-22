@@ -10,6 +10,7 @@ import { OrganizationTestRunner } from './organizationTestRunner';
 import { OrganizationRetryController } from './organizationRetryController';
 import { OrganizationReviewRelease } from './organizationReviewRelease';
 import { OrganizationAutonomyScheduler } from './organizationAutonomyScheduler';
+import { OrganizationWebPatchAuthority } from './organizationWebPatchAuthority';
 
 type Params = Record<string, unknown>;
 export interface OrganizationRpcAuth {
@@ -64,6 +65,8 @@ const METHODS = new Set([
   'org-retry.list',
   'org-review.release',
   'org-autonomy.tick',
+  'org-web-patch.preview',
+  'org-web-patch.apply',
 ]);
 
 export class OrganizationRpcController {
@@ -213,6 +216,37 @@ export class OrganizationRpcController {
         }
       }
 
+      case 'org-web-patch.preview': {
+        this.auth.requireBrowserOrAdmin(request);
+        return new OrganizationWebPatchAuthority(this.plane).preview({
+          projectId: stringParam(params, 'projectId')!,
+          taskId: stringParam(params, 'taskId')!,
+          slotId: stringParam(params, 'slotId')!,
+          tabId: numberParam(params, 'tabId')!,
+        });
+      }
+      case 'org-web-patch.apply': {
+        this.auth.requireBrowserOrAdmin(request);
+        const files = params.files;
+        if (!Array.isArray(files) || !files.every((item) =>
+          item && typeof item === 'object' && !Array.isArray(item) &&
+          typeof (item as Record<string, unknown>).path === 'string' &&
+          typeof (item as Record<string, unknown>).content === 'string'
+        )) throw new Error('Web patch files must contain path/content strings');
+        return new OrganizationWebPatchAuthority(this.plane).apply({
+          projectId: stringParam(params, 'projectId')!,
+          taskId: stringParam(params, 'taskId')!,
+          slotId: stringParam(params, 'slotId')!,
+          tabId: numberParam(params, 'tabId')!,
+          attemptId: stringParam(params, 'attemptId')!,
+          baseSha: stringParam(params, 'baseSha')!,
+          summary: stringParam(params, 'summary')!,
+          files: files.map((item) => ({
+            path: (item as { path: string }).path,
+            content: (item as { content: string }).content,
+          })),
+        });
+      }
       case 'org-autonomy.tick': {
         this.auth.requireAdmin(request);
         return new OrganizationAutonomyScheduler(this.plane)
