@@ -103,7 +103,11 @@ describe('Web Patch Authority with real Git', () => {
       expect(first.claimId).toEqual(expect.any(String));
       expect(plane.organization.getWorkItem(work.id).status).toBe('completed');
       expect(plane.workspaces.get(workspace.id).status).toBe('released');
-      expect(git(workspace.path, 'rev-parse', 'HEAD')).toBe(first.commitSha);
+      // A successful WorkOutcome removes the temporary worktree. The Git
+      // branch is durable and remains the authoritative commit reference.
+      expect(
+        git(repo, 'rev-parse', `refs/heads/${workspace.branch}`),
+      ).toBe(first.commitSha);
       expect(git(repo, 'rev-parse', 'refs/heads/main')).toBe(baseline);
 
       const replay = authority.apply(input);
