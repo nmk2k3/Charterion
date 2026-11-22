@@ -51,12 +51,21 @@ export class OrganizationWorkflowCoordinator {
     `).get(workItemId) as { organizationId?: string; projectId?: string; missionId?: string } | undefined;
   }
 
-  private targetBranch(root: string, baseSha: string): string {
+  private targetBranch(root: string, workspaceBaseSha: string, headSha: string): { branch: string; baseSha: string } {
     for (const branch of ['main', 'master']) {
-      const result = spawnSync(this.gitPath, ['-C', root, 'rev-parse', '--verify', `${branch}^{commit}`], { encoding: 'utf8', windowsHide: true, timeout: 5000, shell: false });
-      if (result.status === 0 && result.stdout.trim().toLowerCase() === baseSha.toLowerCase()) return branch;
+      const result = spawnSync(this.gitPath, ['-C', root, 'rev-parse', '--verify', `${branch}^{commit}`], {
+        encoding: 'utf8', windowsHide: true, timeout: 5000, shell: false,
+      });
+      if (result.status !== 0) continue;
+      const targetTip = result.stdout.trim();
+      // A Tester may inherit a Developer commit, and a retry may inherit several
+      // verified commits. The target branch tip must still be an ancestor.
+      const ancestor = spawnSync(this.gitPath, ['-C', root, 'merge-base', '--is-ancestor', targetTip, headSha], {
+        encoding: 'utf8', windowsHide: true, timeout: 5000, shell: false,
+      });
+      if (ancestor.status === 0) return { branch, baseSha: targetTip };
     }
-    throw new Error('No main or master target branch matches the workspace base SHA');
+    throw new Error(`No main or master tip is an ancestor of reviewed head ${headSha} (workspace base ${workspaceBaseSha})`);
   }
 
   private reviewerFor(organizationId: string, authorSubject: string, now: number): OrganizationAgentRecord {
@@ -207,11 +216,11 @@ export class OrganizationWorkflowCoordinator {
       );
       const project = this.database.db.prepare('SELECT root_path FROM projects WHERE id=?').get(identity.projectId) as { root_path?: string } | undefined;
       const root = required(project?.root_path, 'Project root');
-      const targetBranch = this.targetBranch(root, workspace.baseSha);
+      const target = this.targetBranch(root, workspace.baseSha, claim.commitSha);
       const changeRequest = this.changes.listChangeRequests(identity.projectId).find((item) => item.taskId === claim.taskId && item.status !== 'closed')
         ?? this.changes.open({
           projectId: identity.projectId, taskId: claim.taskId, subject: claim.subject, branch: workspace.branch,
-          targetBranch, baseSha: workspace.baseSha, headSha: claim.commitSha, claimId: claim.id,
+          targetBranch: target.branch, baseSha: target.baseSha, headSha: claim.commitSha, claimId: claim.id,
         }, now);
       const reviewRequest = this.reviewPool.open({
         organizationId: identity.organizationId, changeRequestId: changeRequest.id, risk: 'normal',
