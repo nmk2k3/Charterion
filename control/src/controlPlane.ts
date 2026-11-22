@@ -735,6 +735,11 @@ export class ControlPlane {
       const linked = this.database.db.prepare('SELECT id FROM organization_agents WHERE runtime_slot_id=?')
         .get(slot.id) as { id?: string } | undefined;
       if (!linked?.id) throw new Error('Legacy repair requires an Organization Agent bound to this slot');
+      const ownedWork = this.database.db.prepare('SELECT owner_agent_id FROM organization_work_items WHERE id=?')
+        .get(task.organizationWorkItemId) as { owner_agent_id?: string | null } | undefined;
+      if (!ownedWork || ownedWork.owner_agent_id !== linked.id) {
+        throw new Error('Legacy repair evidence WorkItem is not owned by the bound Organization Agent');
+      }
       const active = this.agentContinuity.active(linked.id);
       if (!active || active.conversationKey !== expectedLegacyKey || active.runtimeSlotId !== slot.id) {
         throw new Error('Legacy repair persistent Organization conversation does not match');
