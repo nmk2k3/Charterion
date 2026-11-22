@@ -37,12 +37,14 @@ try {
         'control/tests/organizationReviewGate.test.ts',
         'control/tests/organizationPostTestRelease.test.ts',
         'control/tests/organizationTesterVerificationGate.test.ts',
+        'control/tests/organizationWebPatchAuthority.test.ts',
+        'tests/organizationWebPatchProtocol.test.ts',
+        'tests/organizationWebReviewProtocol.test.ts',
         '--pool=forks', '--fileParallelism=false'
     )
-    Invoke-Checked -Tool 'npm' -Arguments @('run', 'check')
-    Invoke-Checked -Tool 'npm' -Arguments @('run', 'check:architecture')
-    Invoke-Checked -Tool 'npm' -Arguments @('test')
-    Invoke-Checked -Tool 'npm' -Arguments @('run', 'build')
+    # Includes strict generated-protocol checks, complete tests, Windows
+    # native-host build, native transport smoke, and deployment smoke.
+    Invoke-Checked -Tool 'npm' -Arguments @('run', 'verify:full')
 
     & git diff --check
     if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
