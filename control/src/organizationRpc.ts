@@ -520,8 +520,9 @@ export class OrganizationRpcController {
         // Preserve non-browser structured-result completion for the WorkItem
         // owner or Mission DRI. Keep it impossible to complete verified-claim
         // tasks or runtime-bound reviewers using an ordinary identity token.
-        const actorAuthorized = (owner?.id === grant.subject && owner.status === 'active') ||
-          (dri?.id === grant.subject && dri.status === 'active');
+        const actorAuthorized =
+          (owner !== undefined && owner.id === grant.subject && owner.status === 'active') ||
+          (dri !== undefined && dri.id === grant.subject && dri.status === 'active');
         if (work.completionPolicy !== 'structured-result' ||
             !actorAuthorized ||
             grant.agentSlotId !== undefined ||
