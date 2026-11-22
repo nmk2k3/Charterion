@@ -13,9 +13,10 @@ export type FleetAction =
 export function agentConversationUrl(conversationKey?: string): string {
   if (!conversationKey?.startsWith('conversation:')) return 'https://chatgpt.com/';
   const id = conversationKey.slice('conversation:'.length);
-  // Fallback identities describe local UI sessions, not canonical ChatGPT /c/ ids.
-  // Navigating to /c/local-chatgpt%3A... produces an invalid recovery URL.
-  if (!id || id === 'new' || /^(?:WEB:|local-chatgpt:)/i.test(id)) return 'https://chatgpt.com/';
+  // Never silently replace a durable /c/ identity with a new root conversation.
+  // ChatGPT can use local-chatgpt:* inside its /c/ route; the Kernel persists
+  // the complete observed identity and must recover the same one.
+  if (!id || id === 'new' || /^WEB:/i.test(id)) return 'https://chatgpt.com/';
   return `https://chatgpt.com/c/${encodeURIComponent(id)}`;
 }
 
@@ -40,6 +41,17 @@ function indexFleetTabs(tabs: readonly ManagedTab[]): FleetTabIndex {
 
 function ownedTabForAgent(agent: ControlAgentView, index: FleetTabIndex, mappedTabId?: number): ManagedTab | undefined {
   const owned = index.byAgentSlotId.get(agent.id) ?? [];
+  if (agent.conversationKey && agent.rolloverState === 'idle') {
+    // A stale tab mapping must not override the persistent Organization Agent
+    // conversation. Prefer an exact identity match even if another tab has
+    // the old mapped tabId. If none matches, reconcile the missing original.
+    const matching = owned.filter((tab) => tab.snapshot.conversationKey === agent.conversationKey);
+    if (mappedTabId !== undefined) {
+      const mapped = matching.find((tab) => tab.tabId === mappedTabId);
+      if (mapped) return mapped;
+    }
+    return matching.length === 1 ? matching[0] : undefined;
+  }
   if (mappedTabId !== undefined) {
     const mapped = owned.find((tab) => tab.tabId === mappedTabId);
     if (mapped) return mapped;
@@ -55,7 +67,13 @@ function reconciliationTabForAgent(agent: ControlAgentView, index: FleetTabIndex
   if (reservedTabId === undefined || agent.browserTabId !== reservedTabId || !agent.browserLeaseId ||
       !['opening', 'open'].includes(agent.browserState)) return undefined;
   const reserved = index.byTabId.get(reservedTabId);
-  return reserved && !reserved.binding.agentSlotId ? reserved : undefined;
+  if (!reserved || reserved.binding.agentSlotId) return undefined;
+  if (agent.conversationKey && agent.rolloverState === 'idle' &&
+      reserved.snapshot.conversationKey !== agent.conversationKey &&
+      !reserved.snapshot.conversationKey.startsWith('provisional:')) {
+    return undefined;
+  }
+  return reserved;
 }
 export function planFleetReconciliation(
   agents: readonly ControlAgentView[],
