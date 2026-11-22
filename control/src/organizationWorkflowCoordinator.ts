@@ -10,6 +10,7 @@ import type { OrganizationRuntimeAcquisitionAuthority } from './organizationRunt
 import type { OrganizationExecutionBridge } from './organizationExecutionBridge';
 import type { OrganizationAgentRecord } from './organizationContracts';
 import type { PromotionAuthority } from './promotionAuthority';
+import { assertOrganizationReviewReady } from './organizationReviewGate';
 
 export interface OrganizationWorkflowReconciliation {
   organizationId: string;
@@ -140,6 +141,12 @@ export class OrganizationWorkflowCoordinator {
     const request = this.reviewPool.getRequest(required(reviewRequestId, 'Review request id'));
     if (request.status !== 'approved') return { reviewRequestId: request.id, status: request.status };
     const change = this.changes.getChangeRequest(request.changeRequestId);
+    assertOrganizationReviewReady(
+      this.database,
+      change.taskId,
+      change.claimId,
+      change.headSha,
+    );
     const slots = this.reviewPool.listSlots(request.id);
     const reviewer = slots.find((slot) => slot.reviewerAgentId)?.reviewerAgentId;
     if (!reviewer) throw new Error('Approved Review Request has no reviewer identity');
@@ -192,6 +199,12 @@ export class OrganizationWorkflowCoordinator {
       return { organizationId: identity.organizationId, workItemId, status: 'blocked', reason: 'Verified organization work lacks exact commit or durable workspace' };
     }
     try {
+      assertOrganizationReviewReady(
+        this.database,
+        claim.taskId,
+        claim.id,
+        claim.commitSha,
+      );
       const project = this.database.db.prepare('SELECT root_path FROM projects WHERE id=?').get(identity.projectId) as { root_path?: string } | undefined;
       const root = required(project?.root_path, 'Project root');
       const targetBranch = this.targetBranch(root, workspace.baseSha);

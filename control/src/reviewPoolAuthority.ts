@@ -11,6 +11,7 @@ import type {
   ReviewSlotRecord,
   ReviewSlotState,
 } from './reviewPoolContracts';
+import { assertOrganizationReviewReady } from './organizationReviewGate';
 
 type Row = Record<string, string | number | null | undefined>;
 
@@ -49,6 +50,36 @@ export class ReviewPoolAuthority {
     this.database.db.prepare('INSERT INTO events(project_id,type,subject,payload_json,created_at) VALUES(?,?,?,?,?)')
       .run(projectId, type, subject, JSON.stringify(payload), now);
   }
+
+  private assertChangeRequestReady(
+    changeRequestId: string,
+  ): void {
+    const change = this.database.db.prepare(`
+      SELECT task_id, claim_id, head_sha
+      FROM change_requests
+      WHERE id = ?
+    `).get(changeRequestId) as
+      | {
+          task_id: string;
+          claim_id: string;
+          head_sha: string;
+        }
+      | undefined;
+
+    if (!change) {
+      throw new Error(
+        `Change Request ${changeRequestId} does not exist`,
+      );
+    }
+
+    assertOrganizationReviewReady(
+      this.database,
+      change.task_id,
+      change.claim_id,
+      change.head_sha,
+    );
+  }
+
 
   getRequest(id: string): ReviewRequestRecord {
     const row = this.database.db.prepare('SELECT * FROM review_requests WHERE id=?').get(id) as Row | undefined;
@@ -110,6 +141,7 @@ export class ReviewPoolAuthority {
           VALUES(?,?,?,?,?,'open',NULL,NULL,NULL,NULL)`)
           .run(randomUUID(), id, slot.dimension, slot.required ? 1 : 0, slot.requiredDomainId ?? null);
       }
+      this.assertChangeRequestReady(changeRequestId);
       this.event(change.project_id, 'REVIEW_REQUEST_OPENED', id, { changeRequestId, revision: change.revision, headSha: change.head_sha, risk, slots: normalizedSlots }, now);
       return this.getRequest(id);
     });
@@ -162,6 +194,7 @@ export class ReviewPoolAuthority {
     return this.database.transaction(() => {
       const slot = this.getSlot(input.slotId);
       const request = this.getRequest(slot.reviewRequestId);
+      this.assertChangeRequestReady(request.changeRequestId);
       if (request.status !== 'open' || slot.state !== 'open') throw new Error('Review slot is not claimable');
       if (!this.eligible(request, slot, input.reviewerAgentId)) throw new Error('Reviewer is not eligible for this review slot');
       this.database.db.prepare("UPDATE review_slots SET state='claimed',reviewer_agent_id=?,claimed_at=? WHERE id=? AND state='open'")
@@ -192,6 +225,7 @@ export class ReviewPoolAuthority {
     return this.database.transaction(() => {
       const slot = this.getSlot(input.slotId);
       const request = this.getRequest(slot.reviewRequestId);
+      this.assertChangeRequestReady(request.changeRequestId);
       if (slot.state !== 'claimed' || slot.reviewerAgentId !== input.reviewerAgentId) throw new Error('Only the claiming reviewer may decide this review slot');
       const note = required(input.note, 'Review decision note');
       const state: ReviewSlotState = input.decision === 'approve' ? 'approved' : input.decision === 'request-changes' ? 'changes-requested' : 'rejected';

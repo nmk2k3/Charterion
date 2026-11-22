@@ -10,6 +10,7 @@ import type {
   SupervisorReview,
   UpdateChangeRequestInput,
 } from './contracts';
+import { assertOrganizationReviewReady } from './organizationReviewGate';
 
 type Row = Record<string, string | number | null>;
 const GIT_SHA = /^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$/;
@@ -172,6 +173,12 @@ export class ChangeRequestAuthority {
 
   review(input: SubmitSupervisorReviewInput, now = Date.now()): SupervisorReview {
     const current = this.getChangeRequest(input.changeRequestId);
+    assertOrganizationReviewReady(
+      this.database,
+      current.taskId,
+      current.claimId,
+      current.headSha,
+    );
     if (current.status !== 'open') throw new Error(`Change Request ${current.id} is not reviewable while ${current.status}`);
     const reviewer = required(input.reviewerSubject, 'Reviewer subject');
     if (reviewer === current.authorSubject) throw new Error('Change Request author cannot approve their own work');
@@ -202,6 +209,12 @@ export class ChangeRequestAuthority {
   }
   queue(changeRequestId: string, now = Date.now()): MergeQueueEntry {
     const current = this.getChangeRequest(changeRequestId);
+    assertOrganizationReviewReady(
+      this.database,
+      current.taskId,
+      current.claimId,
+      current.headSha,
+    );
     if (current.status !== 'approved') throw new Error(`Change Request ${current.id} is not approved`);
     const latestReview = this.database.db.prepare(`
       SELECT * FROM supervisor_reviews WHERE change_request_id=? ORDER BY created_at DESC,id DESC LIMIT 1

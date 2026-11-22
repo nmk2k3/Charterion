@@ -93,15 +93,41 @@ export class WorkspaceAuthority {
     return rows.map(workspaceFrom);
   }
 
-  materialize(input: { projectId: string; projectRoot: string; slotId: string; role: string; taskId: string }): MaterializedWorkspace {
+  materialize(input: { projectId: string; projectRoot: string; slotId: string; role: string; taskId: string; baseSha?: string; }): MaterializedWorkspace {
     const existing = this.find(input.projectId, input.taskId);
     if (existing) {
       if (existing.slotId !== input.slotId) throw new Error(`Task ${input.taskId} workspace belongs to another AgentSlot`);
       if (existing.status !== 'active') throw new Error(`Task ${input.taskId} workspace is ${existing.status}`);
+      if (input.baseSha && existing.baseSha !== input.baseSha) {
+        throw new Error(
+          `Task ${input.taskId} workspace base does not match verified dependency`,
+        );
+      }
       return { repoPath: existing.repoPath, path: existing.path, branch: existing.branch, baseSha: existing.baseSha };
     }
     const repoPath = this.repoRoot(input.projectRoot);
-    const baseSha = this.git(repoPath, ['rev-parse', '--verify', 'HEAD']);
+    const baseSha =
+      input.baseSha ??
+      this.git(repoPath, ['rev-parse', '--verify', 'HEAD']);
+
+    if (input.baseSha) {
+      if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(baseSha)) {
+        throw new Error('Verified dependency commit SHA is invalid');
+      }
+
+      const objectType = this.git(repoPath, [
+        'cat-file',
+        '-t',
+        baseSha,
+      ]);
+
+      if (objectType !== 'commit') {
+        throw new Error(
+          'Verified dependency does not reference a Git commit',
+        );
+      }
+    }
+
     const branch = `gam/${slug(input.role)}/${slug(input.taskId).slice(0, 48)}`;
     const path = this.validateManagedPath(join(this.managedRoot, input.projectId, `${slug(input.role)}-${slug(input.taskId).slice(0, 32)}`));
     mkdirSync(dirname(path), { recursive: true });

@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   rmSync,
   writeFileSync,
+  readFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -39,7 +40,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 describe('Verified Work Integration', () => {
-  it('accepts completion backed by a verified Git claim', () => {
+  it('passes the exact verified Developer commit to Tester', () => {
     const dir = mkdtempSync(
       join(tmpdir(), 'verified-work-integration-'),
     );
@@ -50,8 +51,12 @@ describe('Verified Work Integration', () => {
     let db: ControlDatabase | undefined;
 
     try {
-      // 1. Create a real Git repository.
+      // ==========================================
+      // 1. Initialize a real Git repository
+      // ==========================================
+
       git(repo, 'init', '-b', 'main');
+
       git(repo, 'config', 'user.name', 'Charterion Test');
       git(
         repo,
@@ -68,10 +73,16 @@ describe('Verified Work Integration', () => {
       git(repo, 'add', 'README.md');
       git(repo, 'commit', '-m', 'initial commit');
 
-      // 2. Create Kernel state.
+      const initialSha = git(repo, 'rev-parse', 'HEAD');
+
+      // ==========================================
+      // 2. Initialize Kernel
+      // ==========================================
+
       db = new ControlDatabase(join(dir, 'state.db'));
 
       const plane = new ControlPlane(db);
+
       const router = new RpcRouter(
         plane,
         'admin',
@@ -88,24 +99,28 @@ describe('Verified Work Integration', () => {
         name: 'Engineering',
       });
 
+      // ==========================================
+      // 3. Create Developer
+      // ==========================================
+
       const developer = plane.organization.registerAgent({
         organizationId: org.id,
         displayName: 'Developer',
       });
 
-      const workspaceConfig =
+      const developerConfig =
         plane.organization.activeAgentWorkspace(
           developer.id,
         )!;
 
       plane.organization.configureAgentWorkspace({
-        workspaceId: workspaceConfig.id,
+        workspaceId: developerConfig.id,
         rootRef: repo,
         browserProfileId: `browser-${developer.id}`,
         toolProfileRef: `tools-${developer.id}`,
       });
 
-      const acquisition =
+      const developerAcquisition =
         plane.organizationRuntime.requestAndAcquire({
           organizationId: org.id,
           agentId: developer.id,
@@ -114,13 +129,50 @@ describe('Verified Work Integration', () => {
           idempotencyKey: 'verified-developer',
         });
 
-      expect(acquisition.status).toBe('acquired');
+      expect(developerAcquisition.status).toBe('acquired');
+
+      // ==========================================
+      // 4. Create Tester
+      // ==========================================
+
+      const tester = plane.organization.registerAgent({
+        organizationId: org.id,
+        displayName: 'Tester',
+      });
+
+      const testerConfig =
+        plane.organization.activeAgentWorkspace(
+          tester.id,
+        )!;
+
+      plane.organization.configureAgentWorkspace({
+        workspaceId: testerConfig.id,
+        rootRef: repo,
+        browserProfileId: `browser-${tester.id}`,
+        toolProfileRef: `tools-${tester.id}`,
+      });
+
+      const testerAcquisition =
+        plane.organizationRuntime.requestAndAcquire({
+          organizationId: org.id,
+          agentId: tester.id,
+          projectId: project.id,
+          role: 'Tester',
+          idempotencyKey: 'verified-tester',
+        });
+
+      expect(testerAcquisition.status).toBe('acquired');
+
+      // ==========================================
+      // 5. Create Mission
+      // ==========================================
 
       const mission = plane.organization.createMission({
         organizationId: org.id,
         projectId: project.id,
         title: 'Verified implementation',
-        objective: 'Verify the result pipeline',
+        objective:
+          'Verify Developer-to-Tester commit handoff',
         driAgentId: developer.id,
       });
 
@@ -129,7 +181,11 @@ describe('Verified Work Integration', () => {
         'active',
       );
 
-      const work = plane.organization.createWorkItem({
+      // ==========================================
+      // 6. Create Developer WorkItem
+      // ==========================================
+
+      const devWork = plane.organization.createWorkItem({
         missionId: mission.id,
         title: 'Implement',
         objective: 'Produce a real Git commit',
@@ -137,61 +193,112 @@ describe('Verified Work Integration', () => {
         completionPolicy: 'verified-claim',
       });
 
+      // ==========================================
+      // 7. Create dependent Tester WorkItem
+      // ==========================================
+
+      const testWork = plane.organization.createWorkItem({
+        missionId: mission.id,
+        title: 'Test implementation',
+        objective:
+          'Test the exact verified Developer commit',
+        ownerAgentId: tester.id,
+        completionPolicy: 'verified-claim',
+        dependsOn: [devWork.id],
+      });
+
+      // Tester cannot start before Developer completes.
+      expect(() =>
+        plane.organization.setWorkStatus(
+          testWork.id,
+          'ready',
+        ),
+      ).toThrow(/incomplete dependency/);
+
+      // ==========================================
+      // 8. Prepare Developer execution
+      // ==========================================
+
       plane.organization.setWorkStatus(
-        work.id,
+        devWork.id,
         'ready',
       );
 
-      // 3. Project the execution task.
-      const projection =
-        plane.organizationExecution.materialize(work.id);
-
-      const taskWorkspace =
-        plane.provisionTaskWorkspace(
-          project.id,
-          acquisition.runtimeSlotId!,
-          projection.managerTaskId,
+      const developerProjection =
+        plane.organizationExecution.materialize(
+          devWork.id,
         );
 
-      expect(taskWorkspace.status).toBe('active');
+      const developerWorkspace =
+        plane.provisionTaskWorkspace(
+          project.id,
+          developerAcquisition.runtimeSlotId!,
+          developerProjection.managerTaskId,
+        );
 
-      // 4. Make a real commit inside the assigned worktree.
+      expect(developerWorkspace.status).toBe('active');
+
+      expect(developerWorkspace.baseSha).toBe(initialSha);
+
+      // ==========================================
+      // 9. Developer creates a real Git commit
+      // ==========================================
+
       writeFileSync(
-        join(taskWorkspace.path, 'result.txt'),
+        join(developerWorkspace.path, 'result.txt'),
         'Verified integration result\n',
       );
 
-      git(taskWorkspace.path, 'add', 'result.txt');
       git(
-        taskWorkspace.path,
+        developerWorkspace.path,
+        'add',
+        'result.txt',
+      );
+
+      git(
+        developerWorkspace.path,
         'commit',
         '-m',
         'feat: add verified result',
       );
 
       const commitSha = git(
-        taskWorkspace.path,
+        developerWorkspace.path,
         'rev-parse',
         'HEAD',
       );
 
-      // 5. Submit an evidence claim.
+      expect(commitSha).not.toBe(initialSha);
+
+      // ==========================================
+      // 10. Developer submits evidence claim
+      // ==========================================
+
       const claim = plane.evidence.submitClaim({
         projectId: project.id,
-        taskId: projection.managerTaskId,
-        subject: acquisition.runtimeSlotId!,
-        resourceId: taskWorkspace.resourceId,
-        leaseEpoch: taskWorkspace.leaseEpoch,
+        taskId: developerProjection.managerTaskId,
+        subject: developerAcquisition.runtimeSlotId!,
+        resourceId: developerWorkspace.resourceId,
+        leaseEpoch: developerWorkspace.leaseEpoch,
         summary: 'Committed implementation',
         commitSha,
       });
 
-      // 6. Verify using the real RPC path.
+      expect(claim.status).toBe('submitted');
+
+      // ==========================================
+      // 11. Kernel verifies the claim
+      // ==========================================
+
       const verificationResponse = router.handle({
-        id: 'verify',
+        id: 'verify-developer',
         method: 'claim.verify',
-        auth: { adminToken: 'admin' },
-        params: { claimId: claim.id },
+        auth: {
+          adminToken: 'admin',
+        },
+        params: {
+          claimId: claim.id,
+        },
       });
 
       expect(verificationResponse).toMatchObject({
@@ -202,24 +309,34 @@ describe('Verified Work Integration', () => {
         },
       });
 
-      // 7. Assert machine completion was recorded.
-      const executionTask = plane.work.getTask(
-        projection.managerTaskId,
+      // ==========================================
+      // 12. Verify machine completion
+      // ==========================================
+
+      const developerTask = plane.work.getTask(
+        developerProjection.managerTaskId,
       );
 
-      expect(executionTask?.machineCompletion).toMatchObject({
+      expect(
+        developerTask?.machineCompletion,
+      ).toMatchObject({
         kind: 'verified-claim',
         claimId: claim.id,
         commitSha,
       });
 
-      // 8. Complete the Organization WorkItem.
+      // ==========================================
+      // 13. Complete Developer WorkItem
+      // ==========================================
+
       const completionResponse = router.handle({
-        id: 'complete',
+        id: 'complete-developer',
         method: 'org-work.complete',
-        auth: { adminToken: 'admin' },
+        auth: {
+          adminToken: 'admin',
+        },
         params: {
-          workItemId: work.id,
+          workItemId: devWork.id,
           completedBy: developer.id,
           summary: 'Verified implementation completed',
           producedRefs: [`commit:${commitSha}`],
@@ -230,20 +347,105 @@ describe('Verified Work Integration', () => {
         ok: true,
         result: {
           disposition: 'completed',
+          reconciliation: {
+            status: 'ok',
+          },
         },
       });
 
       expect(
-        plane.organization.getWorkItem(work.id).status,
+        plane.organization.getWorkItem(devWork.id).status,
       ).toBe('completed');
 
-      // 9. Completion must be idempotent.
+      // ==========================================
+      // 14. Tester should become ready automatically
+      // ==========================================
+
+      const testerTaskId = `org-work-${testWork.id}`;
+
+      expect(
+        plane.organization.getWorkItem(testWork.id).status,
+      ).toBe('ready');
+
+      const testerTask = plane.work.getTask(testerTaskId);
+
+      expect(testerTask).toMatchObject({
+        id: testerTaskId,
+        targetRole: 'Tester',
+        completionPolicy: 'verified-claim',
+        organizationWorkItemId: testWork.id,
+        dependsOn: [
+          developerProjection.managerTaskId,
+        ],
+      });
+
+      // ==========================================
+      // 15. Provision Tester's workspace
+      // ==========================================
+
+      const testerWorkspace =
+        plane.provisionTaskWorkspace(
+          project.id,
+          testerAcquisition.runtimeSlotId!,
+          testerTaskId,
+        );
+
+      expect(testerWorkspace.status).toBe('active');
+
+      // ==========================================
+      // 16. Verify exact Developer commit handoff
+      // ==========================================
+
+      // The Tester must start from Developer's
+      // verified commit, not the original main HEAD.
+
+      expect(testerWorkspace.baseSha).toBe(commitSha);
+
+      const testerHeadSha = git(
+        testerWorkspace.path,
+        'rev-parse',
+        'HEAD',
+      );
+
+      expect(testerHeadSha).toBe(commitSha);
+      expect(testerHeadSha).not.toBe(initialSha);
+
+      // Verify the committed file is present
+      // in Tester's actual worktree.
+
+      const resultContent = readFileSync(
+        join(testerWorkspace.path, 'result.txt'),
+        'utf8',
+      );
+
+      expect(resultContent.replace(/\r\n/g, '\n')).toBe(
+        'Verified integration result\n',
+        );
+
+      // Verify the same content through Git.
+      expect(
+        git(
+          testerWorkspace.path,
+          'show',
+          'HEAD:result.txt',
+        ),
+      ).toBe('Verified integration result');
+
+      // ==========================================
+      // 17. Check idempotent Developer completion
+      // ==========================================
+
+      const revisionBeforeReplay =
+        plane.work.snapshot().revision;
+
       const replay = router.handle({
-        id: 'complete-replay',
+        id: 'complete-developer-replay',
         method: 'org-work.complete',
-        auth: { adminToken: 'admin' },
+        auth: {
+          adminToken: 'admin',
+        },
         params: {
-          workItemId: work.id,
+          workItemId: devWork.id,
           completedBy: developer.id,
           summary: 'Verified implementation completed',
         },
@@ -252,11 +454,32 @@ describe('Verified Work Integration', () => {
       expect(replay.ok).toBe(true);
 
       expect(
-        plane.ingress.getOutcome(work.id),
+        plane.work.snapshot().revision,
+      ).toBe(revisionBeforeReplay);
+
+      expect(
+        plane.ingress.getOutcome(devWork.id),
       ).toBeDefined();
+
+      // ==========================================
+      // 18. Confirm Tester still requires verification
+      // ==========================================
+
+      expect(
+        plane.organization.getWorkItem(testWork.id).status,
+      ).toBe('ready');
+
+      expect(
+        plane.ingress.getOutcome(testWork.id),
+      ).toBeUndefined();
+
     } finally {
       db?.close();
-      rmSync(dir, { recursive: true, force: true });
+
+      rmSync(dir, {
+        recursive: true,
+        force: true,
+      });
     }
   }, 30000);
 });
