@@ -80,6 +80,34 @@ npm run gamctl -- org-review.promote --admin --params '{"reviewRequestId":"<revi
 The daemon runs autonomy convergence every 15 seconds by default;
 `GAM_AUTONOMY_POLL_MS` can change it between 5 seconds and 10 minutes.
 
+## Legacy ChatGPT conversation identity recovery (admin only)
+
+Older pilot states may contain a synthetic `conversation:local-chatgpt:<UUID>`
+identity even when the existing ChatGPT Developer tab has a real
+`https://chatgpt.com/c/<UUID>` URL. Never create a new tab at
+`/c/local-chatgpt%3A...`, modify SQLite by hand, or use `agent.bind` to
+override the persistent Organization Agent continuity check.
+
+After a database backup and verifying the original tab still contains the
+historical task replies, an administrator may use
+`agent.repair-legacy-conversation --admin --params-file <file>`.
+The JSON object must contain exactly the required values:
+`slotId`, `expectedLegacyKey`, `observedCanonicalKey`,
+`evidenceAttemptId`, and `observedTabId`. The attempt must be a durable
+`reply-observed` Organization WorkItem attempt linked to that same slot,
+tab, role, project and Organization Agent. The Kernel requires an absent
+browser, idle rollover, no pending browser operations and no owner conflict
+for the canonical destination. It atomically updates AgentSlot,
+AgentConversation and persistent OrganizationAgentConversation identity,
+preserves existing attempt records, increments the slot lease epoch, and
+records an audit event. It is not a general conversation rebind or rollover.
+
+This is a **Kernel-only admin RPC** exposed through `GAMCTL.cmd`; it must
+never be added to the Browser Native Messaging allowlist. Rebuild and
+restart the exact existing Pilot Kernel (not another GAM_HOME instance)
+before invoking it. Do not run this repair merely because a random tab URL
+differs from the persistent conversation.
+
 ## Limits and safety boundaries
 
 - ChatGPT Web itself has no terminal or filesystem access. The extension
