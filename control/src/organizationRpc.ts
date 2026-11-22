@@ -11,6 +11,7 @@ import { OrganizationRetryController } from './organizationRetryController';
 import { OrganizationReviewRelease } from './organizationReviewRelease';
 import { OrganizationAutonomyScheduler } from './organizationAutonomyScheduler';
 import { OrganizationWebPatchAuthority } from './organizationWebPatchAuthority';
+import { OrganizationWebReviewAuthority, type WebReviewDecision } from './organizationWebReviewAuthority';
 
 type Params = Record<string, unknown>;
 export interface OrganizationRpcAuth {
@@ -67,6 +68,9 @@ const METHODS = new Set([
   'org-autonomy.tick',
   'org-web-patch.preview',
   'org-web-patch.apply',
+  'org-web-review.preview',
+  'org-web-review.decide',
+  'org-review.promote',
 ]);
 
 export class OrganizationRpcController {
@@ -216,6 +220,36 @@ export class OrganizationRpcController {
         }
       }
 
+      case 'org-web-review.preview': {
+        this.auth.requireBrowserOrAdmin(request);
+        return new OrganizationWebReviewAuthority(this.plane).preview({
+          projectId: stringParam(params, 'projectId')!,
+          taskId: stringParam(params, 'taskId')!,
+          slotId: stringParam(params, 'slotId')!,
+          tabId: numberParam(params, 'tabId')!,
+        });
+      }
+      case 'org-web-review.decide': {
+        this.auth.requireBrowserOrAdmin(request);
+        return new OrganizationWebReviewAuthority(this.plane).decide({
+          projectId: stringParam(params, 'projectId')!,
+          taskId: stringParam(params, 'taskId')!,
+          slotId: stringParam(params, 'slotId')!,
+          tabId: numberParam(params, 'tabId')!,
+          attemptId: stringParam(params, 'attemptId')!,
+          reviewSlotId: stringParam(params, 'reviewSlotId')!,
+          headSha: stringParam(params, 'headSha')!,
+          decision: enumParam<WebReviewDecision>(params, 'decision',
+            ['approve', 'request-changes', 'reject'] as const)!,
+          note: stringParam(params, 'note')!,
+        });
+      }
+      case 'org-review.promote': {
+        this.auth.requireAdmin(request);
+        return this.plane.organizationWorkflow.reconcileReviewDecision(
+          stringParam(params, 'reviewRequestId')!,
+        );
+      }
       case 'org-web-patch.preview': {
         this.auth.requireBrowserOrAdmin(request);
         return new OrganizationWebPatchAuthority(this.plane).preview({
