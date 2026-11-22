@@ -40,6 +40,57 @@ describe('ChatGPT adapter identity', () => {
 });
 
 describe('ChatGPT page observation', () => {
+  it('captures assistant replies in the current DIL response-body hierarchy', () => {
+    const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <div data-message-author-role="user">Implement uppercase greeting</div>
+      <div data-talvt-turn-state="complete">
+        <div data-content-search-unit-key="reply-1">
+          <div data-response-body>
+            <div data-chatgpt-selection-message-id="reply-42">
+              <div data-markdown-text-style>
+                <div data-dil-source-message-id="reply-42">
+                  <div data-dil-response data-dil-message-id="reply-42">
+                    <p data-d-component data-d-text-flow>
+                      <span data-d-stream-run data-d-text-flow>Patch proposal text</span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <form data-chatgpt-composer>
+        <div data-composer-markdown contenteditable="true" role="textbox"></div>
+      </form>`);
+    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/pilot', 'provisional:pilot');
+    expect(snapshot).toMatchObject({
+      status: 'idle',
+      assistantMessageCount: 1,
+      latestAssistantMessageId: 'message:reply-42',
+      latestAssistantText: 'Patch proposal text',
+    });
+    expect(snapshot.latestAssistantText).not.toContain('Implement uppercase greeting');
+  });
+
+  it('ignores user, generic and hidden DIL-looking nodes as assistant reply evidence', () => {
+    const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <div data-message-author-role="user">
+        <div data-response-body>
+          <div data-dil-response data-dil-message-id="spoofed">Do not capture</div>
+        </div>
+      </div>
+      <div data-response-body><p>Generic Markdown without assistant identity</p></div>
+      <div hidden data-response-body>
+        <div data-dil-response data-dil-message-id="hidden-reply">Hidden reply</div>
+      </div>
+      <textarea id="prompt-textarea"></textarea>`);
+    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/c/pilot', 'provisional:pilot');
+    expect(snapshot.assistantMessageCount).toBe(0);
+    expect(snapshot.latestAssistantText).toBe('');
+    expect(snapshot.latestAssistantMessageId).toBeUndefined();
+  });
+
   it('recognizes the app-shell ProseMirror composer without a legacy prompt-textarea id', () => {
     const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
       <form data-chatgpt-composer>
