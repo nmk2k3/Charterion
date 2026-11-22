@@ -9,6 +9,7 @@ export interface OrganizationAutonomyTick {
   retryCreated: string[];
   exhausted: string[];
   reviewReleased: string[];
+  promotedReviews: string[];
   projectedTaskIds: string[];
   blocked: Array<{ workItemId: string; reason: string }>;
 }
@@ -53,7 +54,7 @@ export class OrganizationAutonomyScheduler {
     }
     const result: OrganizationAutonomyTick = {
       projectId, retryCreated: [], exhausted: [], reviewReleased: [],
-      projectedTaskIds: [], blocked: [],
+      promotedReviews: [], projectedTaskIds: [], blocked: [],
     };
     const missions = this.plane.organization.listMissions()
       .filter((mission) => mission.projectId === projectId && mission.status === 'active');
@@ -108,6 +109,35 @@ export class OrganizationAutonomyScheduler {
           result.blocked.push({
             workItemId: work.id, reason: error instanceof Error ? error.message : String(error),
           });
+        }
+      }
+
+      // Promotion is a distinct operator opt-in. Review decisions are durable
+      // without granting an AI reviewer write access to the target branch.
+      if (process.env.GAM_ALLOW_WEB_PROMOTIONS === '1') {
+        const approved = this.plane.database.db.prepare(`
+          SELECT DISTINCT rr.id
+          FROM review_requests rr
+          JOIN organization_review_work_items b ON b.review_request_id=rr.id
+          JOIN change_requests cr ON cr.id=rr.change_request_id
+          WHERE b.mission_id=? AND rr.status='approved'
+            AND (cr.status<>'integrated' OR EXISTS (
+              SELECT 1 FROM organization_review_work_items pending
+              JOIN organization_work_items w ON w.id=pending.work_item_id
+              WHERE pending.review_request_id=rr.id AND w.status<>'completed'
+            ))
+        `).all(mission.id) as Array<{ id: string }>;
+        for (const approvedRequest of approved) {
+          try {
+            const promotion = this.plane.organizationWorkflow
+              .reconcileReviewDecision(approvedRequest.id, now);
+            if (promotion.status === 'promoted') result.promotedReviews.push(approvedRequest.id);
+          } catch (error) {
+            result.blocked.push({
+              workItemId: approvedRequest.id,
+              reason: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
       }
     }
