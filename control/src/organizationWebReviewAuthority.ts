@@ -54,7 +54,7 @@ export class OrganizationWebReviewAuthority {
 
   private context(input: {
     projectId: string; taskId: string; slotId: string; tabId: number;
-  }) {
+  }, allowSettled = false) {
     const { projectId, taskId, slotId, tabId } = input;
     const slot = this.plane.getAgentSlot(slotId);
     const task = this.plane.work.getTask(taskId);
@@ -85,7 +85,9 @@ export class OrganizationWebReviewAuthority {
       throw new Error('Web review has no durable Review Pool binding');
     }
     const request = this.plane.reviewPool.getRequest(binding.review_request_id);
-    if (request.status !== 'open' || request.projectId !== projectId ||
+    if ((!allowSettled && request.status !== 'open') ||
+        (allowSettled && !['open','approved','changes-requested','rejected'].includes(request.status)) ||
+        request.projectId !== projectId ||
         request.organizationId !== mission.organizationId) {
       throw new Error('Web Review Pool request is not open in this Mission');
     }
@@ -95,8 +97,9 @@ export class OrganizationWebReviewAuthority {
     }
     const reviewSlot = this.plane.reviewPool.getSlot(binding.review_slot_id);
     if (reviewSlot.reviewRequestId !== request.id ||
-        !['open', 'claimed'].includes(reviewSlot.state) ||
-        (reviewSlot.state === 'claimed' && reviewSlot.reviewerAgentId !== agent.id)) {
+        !(['open', 'claimed'].includes(reviewSlot.state) ||
+          (allowSettled && ['approved','changes-requested','rejected'].includes(reviewSlot.state))) ||
+        (reviewSlot.state !== 'open' && reviewSlot.reviewerAgentId !== agent.id)) {
       throw new Error('Web review slot is no longer eligible');
     }
     assertOrganizationReviewReady(this.plane.database, change.taskId, change.claimId, change.headSha);
@@ -152,7 +155,7 @@ export class OrganizationWebReviewAuthority {
       return result;
     }
 
-    const { task, agent, reviewSlot, request, change } = this.context(input);
+    const { task, agent, reviewSlot, request, change } = this.context(input, last?.type === 'ORG_WEB_REVIEW_STARTED');
     if (reviewSlot.id !== input.reviewSlotId || change.headSha !== input.headSha) {
       throw new Error('Web review response is for a different review slot or commit');
     }
