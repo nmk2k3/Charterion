@@ -10,6 +10,7 @@ import type { OrganizationRuntimeAcquisitionAuthority } from './organizationRunt
 import type { OrganizationExecutionBridge } from './organizationExecutionBridge';
 import type { OrganizationAgentRecord } from './organizationContracts';
 import type { PromotionAuthority } from './promotionAuthority';
+import { WorkIngressAuthority } from './workIngressAuthority';
 import { assertOrganizationReviewReady } from './organizationReviewGate';
 
 export interface OrganizationWorkflowReconciliation {
@@ -186,6 +187,25 @@ export class OrganizationWorkflowCoordinator {
       promotionId: decided.id, authoritySubject: 'system:release-governor',
     }, now) : decided;
     const integrated = this.changes.observeIntegration(prepared.id, now);
+    // Each approved Review Pool slot is a durable evidence-backed decision.
+    // Close its corresponding structured-result WorkItem via the existing
+    // WorkIngress authority, so Mission completion is not left hanging.
+    const bindings = this.database.db.prepare(`
+      SELECT work_item_id, reviewer_agent_id, review_slot_id
+      FROM organization_review_work_items WHERE review_request_id=?
+    `).all(request.id) as Array<{
+      work_item_id: string; reviewer_agent_id: string; review_slot_id: string;
+    }>;
+    for (const binding of bindings) {
+      const reviewWork = this.organization.getWorkItem(binding.work_item_id);
+      if (reviewWork.status === 'completed') continue;
+      new WorkIngressAuthority(this.database).completeWorkItem({
+        workItemId: reviewWork.id,
+        completedBy: binding.reviewer_agent_id,
+        summary: `Review Pool slot ${binding.review_slot_id} approved exact head ${current.headSha}`,
+        decisionRefs: [`review-request:${request.id}`, `review-slot:${binding.review_slot_id}`],
+      }, now);
+    }
     this.database.db.prepare("UPDATE organization_review_work_items SET status='completed',updated_at=? WHERE review_request_id=? AND status='decided'")
       .run(now, request.id);
     this.event(current.projectId, 'ORGANIZATION_WORK_PROMOTED', request.id, {
