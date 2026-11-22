@@ -65,6 +65,7 @@ npm run gamctl -- org-autonomy.tick --admin --params '{"projectId":"<projectId>"
 npm run gamctl -- org-review.release --admin --params '{"workItemId":"<testerWorkItemId>"}'
 npm run gamctl -- org-test.run --admin --params '{"projectId":"<projectId>","workItemId":"<testerWorkItemId>"}'
 npm run gamctl -- org-retry.list --admin --params '{"missionId":"<missionId>"}'
+npm run gamctl -- org-review.promote --admin --params '{"reviewRequestId":"<reviewRequestId>"}'
 ```
 
 The daemon runs autonomy convergence every 15 seconds by default;
@@ -95,6 +96,10 @@ The daemon runs autonomy convergence every 15 seconds by default;
 - A general multi-branch merge candidate may differ from the exact verified
   claim SHA. Promotion currently fails closed in that case; rerun the appropriate
   integration/test/review process instead of bypassing evidence.
+- Automatic AI decisions must not be mistaken for human review or a
+  security audit; they are untrusted model outputs bound to test and diff
+  evidence. Keep `GAM_ALLOW_WEB_PROMOTIONS=0` for a pilot and use the
+  authenticated `org-review.promote` operation only after operator inspection.
 - Direct human Git modifications outside Charterion remain outside the
   application's security boundary. Protect the target branch using repository
   permissions and branch rules.
