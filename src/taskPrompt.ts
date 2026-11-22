@@ -2,7 +2,6 @@ import { buildTaskOrganizationSystemPrompt } from './organizationPolicy';
 import { buildReviewPrompt } from './review';
 import { buildStructuredResultPrompt, type StructuredResultRetryContext } from './structuredResult';
 import type { AgentTask, ManagedTask } from './contracts';
-import type { NativeOrganizationReviewPreview } from './nativeControl';
 
 export interface TaskWorkspacePromptContext {
   projectId: string; taskId: string; slotId: string; path: string; branch: string; baseSha: string;
@@ -10,6 +9,18 @@ export interface TaskWorkspacePromptContext {
   patchEnabled?: boolean;
   previewHeadSha?: string;
   sourceFiles?: Array<{ path: string; content: string }>;
+}
+
+export interface OrganizationReviewPromptContext {
+  taskId: string;
+  slotId: string;
+  reviewSlotId: string;
+  reviewRequestId: string;
+  headSha: string;
+  diff: string;
+  diffComplete: boolean;
+  reviewEnabled: boolean;
+  promotionEnabled: boolean;
 }
 
 export const MAX_DEPENDENCY_CONTEXT_CHARS = 24000;
@@ -34,7 +45,7 @@ export function buildTaskDispatchPrompt(
   directDependencies: readonly ManagedTask[],
   workspace?: TaskWorkspacePromptContext,
   structuredRetry?: StructuredResultRetryContext,
-  review?: NativeOrganizationReviewPreview,
+  review?: OrganizationReviewPromptContext,
 ): string {
   const blocks: string[] = [];
   let used = 0;
