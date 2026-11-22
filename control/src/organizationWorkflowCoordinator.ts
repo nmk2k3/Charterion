@@ -69,9 +69,17 @@ export class OrganizationWorkflowCoordinator {
     throw new Error(`No main or master tip is an ancestor of reviewed head ${headSha} (workspace base ${workspaceBaseSha})`);
   }
 
-  private reviewerFor(organizationId: string, authorSubject: string, now: number): OrganizationAgentRecord {
+  private reviewerFor(
+    organizationId: string,
+    authorSubject: string,
+    sourceOwnerAgentId: string | undefined,
+    now: number,
+  ): OrganizationAgentRecord {
     const reusable = this.organization.listAgents(organizationId)
-      .filter((agent) => agent.status === 'active' && agent.id !== authorSubject && !agent.runtimeSlotId)
+      .filter((agent) => agent.status === 'active' &&
+        agent.id !== authorSubject &&
+        agent.id !== sourceOwnerAgentId &&
+        !agent.runtimeSlotId)
       .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))[0];
     if (reusable) return reusable;
     const department = this.organization.listDepartments(organizationId)[0] ?? this.organization.createDepartment({
@@ -108,7 +116,14 @@ export class OrganizationWorkflowCoordinator {
     if (existingBinding?.id) return;
     // Compatibility recovery for review work materialized before the typed binding existed.
     if (this.organization.listWorkItems(identity.missionId).some((item) => item.objective.includes(marker))) return;
-    const reviewer = this.reviewerFor(identity.organizationId, authorSubject, now);
+    const sourceTaskId = this.changes.getChangeRequest(request.changeRequestId).taskId;
+    const sourceOwnerAgentId = sourceTaskId.startsWith('org-work-')
+      ? this.organization.getWorkItem(sourceTaskId.slice('org-work-'.length)).ownerAgentId
+      : undefined;
+    // The author subject can be a lease holder/AgentSlot rather than the
+    // Organization agent ID. Never acquire a Review runtime for the
+    // original WorkItem owner, even in legacy workflows.
+    const reviewer = this.reviewerFor(identity.organizationId, authorSubject, sourceOwnerAgentId, now);
     this.organization.addMissionMember(identity.missionId, reviewer.id, 'reviewer', now);
     this.configureReviewer(reviewer, identity.projectId, root, now);
     const runtime = this.organizationRuntime.requestAndAcquire({
