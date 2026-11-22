@@ -167,6 +167,7 @@ export class RpcRouter {
       case 'agent.spawn': return this.agentCreate(request, params);
       case 'agent.list': return this.agentList(request, params);
       case 'agent.bind': return this.agentBind(request, params);
+      case 'agent.repair-legacy-conversation': return this.agentRepairLegacyConversation(request, params);
       case 'agent.suspend': return this.agentSuspend(request, params);
       case 'agent.resume': return this.agentResume(request, params);
       case 'agent.retire': return this.agentRetire(request, params);
@@ -248,6 +249,18 @@ export class RpcRouter {
     return this.plane.bindAgentConversation(stringParam(params, 'slotId')!, stringParam(params, 'conversationKey')!);
   }
 
+  private agentRepairLegacyConversation(request: RpcRequest, params: Record<string, unknown>): unknown {
+    // A misidentified persistent Organization conversation may only be
+    // corrected by an explicit administrator, never by Browser or Worker.
+    this.requireAdmin(request);
+    return this.plane.repairLegacyAgentConversation(
+      stringParam(params, 'slotId')!,
+      stringParam(params, 'expectedLegacyKey')!,
+      stringParam(params, 'observedCanonicalKey')!,
+      stringParam(params, 'evidenceAttemptId')!,
+      numberParam(params, 'observedTabId')!,
+    );
+  }
   private agentSuspend(request: RpcRequest, params: Record<string, unknown>): unknown {
     const slot = this.plane.getAgentSlot(stringParam(params, 'slotId')!);
     this.requireFleetAuthority(request, slot.projectId);
