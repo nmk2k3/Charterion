@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WEB_PATCH_OPEN, WEB_PATCH_CLOSE, parseWebPatchReply } from '../src/organizationWebPatchProtocol';
+import { WEB_PATCH_OPEN, WEB_PATCH_CLOSE, WEB_PATCH_V2_OPEN, WEB_PATCH_V2_CLOSE, hasWebPatchMarkers, parseWebPatchReply } from '../src/organizationWebPatchProtocol';
 
 const expected = { taskId: 'org-work-test', slotId: 'agent-slot', baseSha: 'a'.repeat(40) };
 function reply(files: Array<{ path: string; content: string }> = [
@@ -20,6 +20,22 @@ describe('strict ChatGPT Web patch response parser', () => {
         { path: 'src/feature.ts', content: 'export const ready = true;\n' },
       ]);
     }
+  });
+  it('accepts the renderer-safe V2 envelope with identical Kernel identity rules', () => {
+    const v2 = reply().replace(WEB_PATCH_OPEN, WEB_PATCH_V2_OPEN)
+      .replace(WEB_PATCH_CLOSE, WEB_PATCH_V2_CLOSE);
+    expect(hasWebPatchMarkers(v2)).toBe(true);
+    expect(parseWebPatchReply(v2, expected).kind).toBe('ready');
+    expect(parseWebPatchReply(v2, { ...expected, slotId: 'other' }).kind).toBe('invalid');
+    expect(parseWebPatchReply(v2, { ...expected, baseSha: 'b'.repeat(40) }).kind).toBe('invalid');
+  });
+  it('rejects mixed, duplicate and trailing V2 envelopes', () => {
+    const v2 = reply().replace(WEB_PATCH_OPEN, WEB_PATCH_V2_OPEN)
+      .replace(WEB_PATCH_CLOSE, WEB_PATCH_V2_CLOSE);
+    expect(parseWebPatchReply(v2 + '\n' + v2, expected).kind).toBe('invalid');
+    expect(parseWebPatchReply(v2 + '\nmore words', expected).kind).toBe('invalid');
+    expect(parseWebPatchReply(v2.replace(WEB_PATCH_V2_CLOSE, WEB_PATCH_CLOSE), expected).kind).toBe('invalid');
+    expect(parseWebPatchReply(v2 + '\n' + WEB_PATCH_OPEN, expected).kind).toBe('invalid');
   });
   it('does not treat ordinary prose as an executable patch', () => {
     expect(parseWebPatchReply('I have completed the task.', expected)).toEqual({ kind: 'absent' });
