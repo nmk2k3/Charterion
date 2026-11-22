@@ -414,7 +414,7 @@ export class ControlPlane {
         if (active.holderId !== slot.id || active.taskId !== taskId || active.mode !== 'exclusive') throw new Error('Task workspace resource already has an incompatible active lease');
         lease = active;
       } else lease = this.acquireLease({ resourceId: resource.id, projectId: project.id, holderId: slot.id, taskId, mode: 'exclusive' }, now);
-      capability = this.issueCapability({ subject: slot.id, projectId: project.id, agentSlotId: slot.id, taskId, leaseEpoch: lease.epoch, scopes: ['claim:submit','artifact:register','claim:read','claim:verify','org-work:create','org-work:status','review:read','review:claim','review:decide'], resourceIds: [resource.id], ttlMs: 7 * 24 * 60 * 60 * 1000 }, now);
+      capability = this.issueCapability({ subject: slot.id, projectId: project.id, agentSlotId: slot.id, taskId, leaseEpoch: lease.epoch, scopes: ['claim:submit','artifact:register','claim:read','claim:verify','work:complete','org-work:create','org-work:status','review:read','review:claim','review:decide', ...(slot.role === 'Tester' && process.env.GAM_ALLOW_AGENT_TEST_RUNS === '1' ? ['test:run'] : [])], resourceIds: [resource.id], ttlMs: 7 * 24 * 60 * 60 * 1000 }, now);
       workspace = this.workspaces.record({ ...materialized, projectId: project.id, taskId, slotId: slot.id, resourceId: resource.id, leaseId: lease.id, leaseEpoch: lease.epoch, capabilityId: capability.id, capabilityToken: capability.token }, now);
       this.event(project.id, 'TASK_WORKSPACE_PROVISIONED', workspace.id, { taskId, slotId: slot.id, branch: workspace.branch, path: workspace.path, resourceId: resource.id, leaseId: lease.id }, now);
       return workspace!;
@@ -489,7 +489,9 @@ export class ControlPlane {
         if (completion.kind !== 'verified-claim' || completion.claimId !== claim.id || completion.verificationId !== verification.id || completion.commitSha !== claim.commitSha) {
           throw new Error('Verified-claim task already has a different machine completion');
         }
-        if (workspace) this.finalizeVerifiedTaskWorkspace(workspace.id, now);
+        // Organization work needs its scoped token for org-work.complete.
+        // The RPC releases the workspace after the durable WorkOutcome commits.
+        if (workspace && !claim.taskId.startsWith('org-work-')) this.finalizeVerifiedTaskWorkspace(workspace.id, now);
         return verification;
       }
       if (!workspace || workspace.status !== 'active') throw new Error('Verified-claim task has no active durable TaskWorkspace');
@@ -500,7 +502,7 @@ export class ControlPlane {
       if (claim.taskId.startsWith('org-work-')) {
         this.organizationWorkflow.reconcileVerifiedWork(claim, verification, workspace, now);
       }
-      this.finalizeVerifiedTaskWorkspace(workspace.id, now);
+      if (!claim.taskId.startsWith('org-work-')) this.finalizeVerifiedTaskWorkspace(workspace.id, now);
     }
     return verification;
   }
