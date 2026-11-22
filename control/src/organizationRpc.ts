@@ -122,18 +122,35 @@ export class OrganizationRpcController {
         return new OrganizationWorkReconciler(this.plane)
           .reconcile(stringParam(params, 'projectId')!);
       case 'org-test.run': {
-        this.auth.requireAdmin(request);
+        const projectId = stringParam(params, 'projectId')!;
+        const workItemId = stringParam(params, 'workItemId')!;
+        if (request.auth?.adminToken) {
+          this.auth.requireAdmin(request);
+        } else {
+          if (process.env.GAM_ALLOW_AGENT_TEST_RUNS !== '1') {
+            throw new Error('Agent test execution is disabled by operator policy');
+          }
+          const grant = this.auth.requireCapability(request, 'test:run', { projectId });
+          const work = this.plane.organization.getWorkItem(workItemId);
+          const mission = this.plane.organization.getMission(work.missionId);
+          const owner = work.ownerAgentId
+            ? this.plane.organization.getAgent(work.ownerAgentId) : undefined;
+          if (mission.projectId !== projectId || !owner?.runtimeSlotId ||
+              grant.taskId !== `org-work-${workItemId}` ||
+              grant.agentSlotId !== owner.runtimeSlotId ||
+              grant.subject !== owner.runtimeSlotId ||
+              this.plane.getAgentSlot(owner.runtimeSlotId).role !== 'Tester') {
+            throw new Error('Test execution capability must match assigned Tester workspace');
+          }
+        }
 
         const force = params.force;
-
         if (force !== undefined && typeof force !== 'boolean') {
           throw new Error('force must be a boolean');
         }
 
         return new OrganizationTestRunner(this.plane).run(
-          stringParam(params, 'projectId')!,
-          stringParam(params, 'workItemId')!,
-          force === true,
+          projectId, workItemId, force === true,
         );
       }
       case 'org-test.latest': {
