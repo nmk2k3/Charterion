@@ -3,7 +3,15 @@ import type { AgentStatus, ChatSnapshot, ObservationConfidence } from './contrac
 export const CHATGPT_ADAPTER_VERSION = '2026-08-30.2';
 
 const COMPOSER_SELECTORS = [
+  // New ChatGPT app-shell variants use a ProseMirror editor with composer
+  // attributes instead of #prompt-textarea. Keep these anchored to the
+  // trusted composer container; never match arbitrary editable chat turns.
+  'form[data-chatgpt-composer] [data-composer-markdown][contenteditable="true"][role="textbox"]',
+  '[data-composer-input] [contenteditable="true"][role="textbox"]',
+  '[data-composer-input] [contenteditable="true"]',
+  'form[data-chatgpt-composer] [contenteditable="true"][role="textbox"]',
   'form[data-type="unified-composer"] #prompt-textarea[contenteditable="true"]',
+  'form[data-type="unified-composer"] .ProseMirror[contenteditable="true"]',
   '#prompt-textarea[contenteditable="true"]',
   '#prompt-textarea',
   'textarea#mobile-composer-prompt',
@@ -12,6 +20,8 @@ const COMPOSER_SELECTORS = [
 ];
 const SEND_BUTTON_SELECTORS = [
   'button[data-testid="send-button"]',
+  'button#composer-submit-button',
+  'form[data-chatgpt-composer] button[type="submit"]',
   'button[data-composer-submit]',
   'button[aria-label="Send prompt"]',
   'button[aria-label="Send message"]',
