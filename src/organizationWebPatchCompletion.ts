@@ -5,7 +5,7 @@ import {
   readNativeControlSnapshot,
   type NativeOrganizationWebPatchResult,
 } from './nativeControl';
-import { parseWebPatchReply, WEB_PATCH_OPEN, WEB_PATCH_CLOSE } from './organizationWebPatchProtocol';
+import { hasWebPatchMarkers, parseWebPatchReply } from './organizationWebPatchProtocol';
 
 const inFlight = new Set<string>();
 
@@ -29,7 +29,7 @@ export type WebPatchCompletionOutcome =
 export async function completeOrganizationWebPatch(
   input: WebPatchCompletionInput,
 ): Promise<WebPatchCompletionOutcome> {
-  if (!input.replyText.includes(WEB_PATCH_OPEN) && !input.replyText.includes(WEB_PATCH_CLOSE)) {
+  if (!hasWebPatchMarkers(input.replyText)) {
     return { status: 'ignored' };
   }
   const { attempt, task, tabId, slotId } = input;
