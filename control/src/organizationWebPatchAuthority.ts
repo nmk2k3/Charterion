@@ -126,6 +126,7 @@ export class OrganizationWebPatchAuthority {
   preview(input: { projectId: string; taskId: string; slotId: string; tabId: number }): {
     headSha: string;
     files: WebPatchFile[];
+    patchEnabled: boolean;
   } {
     const { workspace } = this.context(input.projectId, input.taskId, input.slotId, input.tabId);
     const observation = this.plane.workspaces.observe(workspace.id);
@@ -164,7 +165,7 @@ export class OrganizationWebPatchAuthority {
       files.push({ path, content: chunk });
       remaining -= chunk.length;
     }
-    return { headSha: observation.headSha, files };
+    return { headSha: observation.headSha, files, patchEnabled: process.env.GAM_ALLOW_WEB_PATCHES === '1' };
   }
 
   apply(input: WebPatchRequest, now = Date.now()): WebPatchResult {
