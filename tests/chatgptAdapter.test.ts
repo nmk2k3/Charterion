@@ -40,6 +40,55 @@ describe('ChatGPT adapter identity', () => {
 });
 
 describe('ChatGPT page observation', () => {
+  it('recognizes the app-shell ProseMirror composer without a legacy prompt-textarea id', () => {
+    const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <form data-chatgpt-composer>
+        <div data-composer-markdown contenteditable="true" role="textbox"></div>
+        <button type="submit">Send</button>
+      </form>`);
+    const snapshot = snapshotFromDocument(dom.window.document, 'https://chatgpt.com/', 'provisional:modern');
+    expect(snapshot).toMatchObject({ status: 'idle', confidence: 'direct' });
+    expect(snapshot.signals).toContain('composer-ready');
+    expect(findSendButton(dom.window.document)).not.toBeNull();
+  });
+
+  it('recognizes the scoped data-composer-input variant but rejects unrelated editable turns', () => {
+    const active = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <div data-composer-input><div contenteditable="true" role="textbox"></div></div>
+      <div data-message-author-role="assistant" contenteditable="true" role="textbox"></div>`);
+    expect(observePageStatus(active.window.document, 'https://chatgpt.com/').status).toBe('idle');
+    const unrelated = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <div data-message-author-role="assistant" contenteditable="true" role="textbox"></div>`);
+    expect(observePageStatus(unrelated.window.document, 'https://chatgpt.com/').status).toBe('unknown');
+  });
+
+  it('does not accept a hidden or disabled modern composer as ready', () => {
+    const hidden = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <form data-chatgpt-composer hidden>
+        <div data-composer-markdown contenteditable="true" role="textbox"></div>
+      </form>`);
+    expect(observePageStatus(hidden.window.document, 'https://chatgpt.com/').status).toBe('unknown');
+    const disabled = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <form data-chatgpt-composer>
+        <div data-composer-markdown contenteditable="true" role="textbox" aria-disabled="true"></div>
+      </form>`);
+    expect(observePageStatus(disabled.window.document, 'https://chatgpt.com/').status).toBe('unknown');
+  });
+
+  it('requires visible submit acceptance evidence with the app-shell composer', async () => {
+    const dom = new JSDOM(`<!doctype html><title>ChatGPT</title>
+      <form data-chatgpt-composer>
+        <div data-composer-markdown contenteditable="true" role="textbox"></div>
+        <button type="submit" id="composer-submit-button">Send</button>
+      </form>`, { url: 'https://chatgpt.com/' });
+    const editor = dom.window.document.querySelector<HTMLElement>('[data-composer-markdown]')!;
+    dom.window.document.querySelector('button')!.addEventListener('click', (event) => {
+      event.preventDefault();
+      editor.textContent = '';
+    });
+    await expect(sendPrompt(dom.window.document, 'Pilot hello', 100)).resolves.toBeUndefined();
+  });
+
   it('marks a ready composer idle and captures the latest assistant message', () => {
     const dom = new JSDOM(`<!doctype html><title>Role 02 - ChatGPT</title>
       <div data-message-author-role="assistant" data-message-id="m1">first</div>
