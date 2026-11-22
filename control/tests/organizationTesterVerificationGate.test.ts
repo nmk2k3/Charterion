@@ -62,13 +62,20 @@ describe('Tester verification before machine completion', () => {
       plane.organization.setWorkStatus(work.id, 'ready');
       plane.organizationExecution.materialize(work.id);
       const workspace = plane.provisionTaskWorkspace(project.id, tester.slotId, `org-work-${work.id}`);
+      // A managed-worktree Git claim must point to a new, clean commit that
+      // descends from the base. The test suite intentionally remains failing.
+      writeFileSync(join(workspace.path, 'tester-evidence.txt'), 'Executed failing node:test suite\n');
+      git(workspace.path, 'add', 'tester-evidence.txt');
+      git(workspace.path, 'commit', '-m', 'test: record failing evidence');
+      const testedSha = git(workspace.path, 'rev-parse', 'HEAD');
+      expect(testedSha).not.toBe(base);
       const failed = new OrganizationTestRunner(plane).run(project.id, work.id);
       expect(failed.status).toBe('failed');
 
       const claim = plane.evidence.submitClaim({
         projectId: project.id, taskId: `org-work-${work.id}`,
         subject: tester.slotId, resourceId: workspace.resourceId, leaseEpoch: workspace.leaseEpoch,
-        summary: 'Commit is valid but tests are failing', commitSha: base,
+        summary: 'Commit is valid but tests are failing', commitSha: testedSha,
       });
       const verification = plane.verifyClaimAndCompleteTask(claim.id);
       expect(verification.status).toBe('passed');
