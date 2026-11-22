@@ -20,30 +20,29 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
     }
 
-    $checks = @(
-        @('npm', @('run', 'check:control')),
-        @('npm', @('run', 'build:control')),
-        @('npx', @('vitest', 'run',
-            'control/tests/organizationRetryLifecycle.test.ts',
-            'control/tests/organizationReviewGate.test.ts',
-            'control/tests/organizationPostTestRelease.test.ts',
-            'control/tests/organizationTesterVerificationGate.test.ts',
-            '--pool=forks', '--fileParallelism=false')),
-        @('npm', @('run', 'check')),
-        @('npm', @('run', 'check:architecture')),
-        @('npm', @('test')),
-        @('npm', @('run', 'build'))
-    )
-
-    foreach ($check in $checks) {
-        $command = [string]$check[0]
-        $arguments = [string[]]$check[1]
-        Write-Host ("[run] {0} {1}" -f $command, ($arguments -join ' ')) -ForegroundColor Cyan
-        & $command @arguments
+    function Invoke-Checked {
+        param([string]$Tool, [string[]]$Arguments)
+        Write-Host ("[run] {0} {1}" -f $Tool, ($Arguments -join ' ')) -ForegroundColor Cyan
+        & $Tool @Arguments
         if ($LASTEXITCODE -ne 0) {
-            throw ("Verification failed: {0} {1} (exit {2})" -f $command, ($arguments -join ' '), $LASTEXITCODE)
+            throw ("Verification failed: {0} {1} (exit {2})" -f $Tool, ($Arguments -join ' '), $LASTEXITCODE)
         }
     }
+
+    Invoke-Checked -Tool 'npm' -Arguments @('run', 'check:control')
+    Invoke-Checked -Tool 'npm' -Arguments @('run', 'build:control')
+    Invoke-Checked -Tool 'npx' -Arguments @(
+        'vitest', 'run',
+        'control/tests/organizationRetryLifecycle.test.ts',
+        'control/tests/organizationReviewGate.test.ts',
+        'control/tests/organizationPostTestRelease.test.ts',
+        'control/tests/organizationTesterVerificationGate.test.ts',
+        '--pool=forks', '--fileParallelism=false'
+    )
+    Invoke-Checked -Tool 'npm' -Arguments @('run', 'check')
+    Invoke-Checked -Tool 'npm' -Arguments @('run', 'check:architecture')
+    Invoke-Checked -Tool 'npm' -Arguments @('test')
+    Invoke-Checked -Tool 'npm' -Arguments @('run', 'build')
 
     & git diff --check
     if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
