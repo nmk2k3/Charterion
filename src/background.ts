@@ -625,12 +625,15 @@ async function reconcileAgentFleetOnce(): Promise<void> {
     for (const action of actions) {
       const agent = agents.get(action.slotId); if (!agent) continue;
       const project = projects.get(agent.projectId); if (!project) continue;
+      // This is a Kernel-owned logical workspace profile, not the single
+      // physical Edge/Chrome profile reported by browser.report.
+      const slotProfileId = agent.workspaceBrowserProfileId ?? agent.browserProfileId ?? 'gam-default';
       try {
       if (action.kind === 'open') {
         if (!expansionAllowed) {
           if (agent.browserState !== 'absent') {
             delete mapping[agent.id]; await fleetTabs.write(mapping);
-            await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
+            await reportNativeAgentBrowser({ slotId: agent.id, profileId: slotProfileId, browserState: 'absent', observedAt: Date.now() });
           }
           continue;
         }
@@ -639,18 +642,18 @@ async function reconcileAgentFleetOnce(): Promise<void> {
         mapping[agent.id] = tab.id; await fleetTabs.write(mapping);
         const key = agent.conversationKey ?? `url:${action.url}`;
         await updateBinding(tab.id, key, { role: agent.role, project: project.name, notes: `GAM fleet slot ${agent.id}`, agentSlotId: agent.id });
-        await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'opening', tabId: tab.id, observedAt: Date.now() });
+        await reportNativeAgentBrowser({ slotId: agent.id, profileId: slotProfileId, browserState: 'opening', tabId: tab.id, observedAt: Date.now() });
       } else if (action.kind === 'rollover-start') {
         await beginNativeAgentRollover(agent.id, action.rolloverId); scheduleFleetReconcile(0);
       } else if (action.kind === 'rollover-close') {
-        await tabOperations.run(action.tabId, async () => { await beginNativeAgentRollover(agent.id, action.rolloverId); await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() }); await clearFleetBinding(agent.conversationKey, action.tabId); try { await chrome.tabs.remove(action.tabId); } catch (error) { await reportIncident('fleet-tab-close-failed', agent.id, { tabId: action.tabId, error: error instanceof Error ? error.message : String(error) }); } delete mapping[agent.id]; await fleetTabs.write(mapping); await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() }); });
+        await tabOperations.run(action.tabId, async () => { await beginNativeAgentRollover(agent.id, action.rolloverId); await reportNativeAgentBrowser({ slotId: agent.id, profileId: slotProfileId, browserState: 'closing', tabId: action.tabId, observedAt: Date.now() }); await clearFleetBinding(agent.conversationKey, action.tabId); try { await chrome.tabs.remove(action.tabId); } catch (error) { await reportIncident('fleet-tab-close-failed', agent.id, { tabId: action.tabId, error: error instanceof Error ? error.message : String(error) }); } delete mapping[agent.id]; await fleetTabs.write(mapping); await reportNativeAgentBrowser({ slotId: agent.id, profileId: slotProfileId, browserState: 'absent', observedAt: Date.now() }); });
       } else if (action.kind === 'close') {
         await tabOperations.run(action.tabId, async () => {
-        await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'closing', tabId: action.tabId, observedAt: Date.now() });
+        await reportNativeAgentBrowser({ slotId: agent.id, profileId: slotProfileId, browserState: 'closing', tabId: action.tabId, observedAt: Date.now() });
         await clearFleetBinding(agent.conversationKey, action.tabId);
         try { await chrome.tabs.remove(action.tabId); } catch (error) { await reportIncident('fleet-tab-close-failed', agent.id, { tabId: action.tabId, error: error instanceof Error ? error.message : String(error) }); }
         delete mapping[agent.id]; await fleetTabs.write(mapping);
-        await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
+        await reportNativeAgentBrowser({ slotId: agent.id, profileId: slotProfileId, browserState: 'absent', observedAt: Date.now() });
         });
       } else if (action.kind === 'report-open') {
         mapping[agent.id] = action.tabId; await fleetTabs.write(mapping);
@@ -658,10 +661,10 @@ async function reconcileAgentFleetOnce(): Promise<void> {
         if (tab && (tab.binding.agentSlotId !== agent.id || tab.binding.role !== agent.role || tab.binding.project !== project.name)) {
           await updateBinding(tab.tabId, action.conversationKey ?? tab.snapshot.conversationKey, { role: agent.role, project: project.name, notes: `GAM fleet slot ${agent.id}`, agentSlotId: agent.id });
         }
-        await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'open', tabId: action.tabId, ...(action.conversationKey ? { conversationKey: action.conversationKey } : {}), observedAt: Date.now() });
+        await reportNativeAgentBrowser({ slotId: agent.id, profileId: slotProfileId, browserState: 'open', tabId: action.tabId, ...(action.conversationKey ? { conversationKey: action.conversationKey } : {}), observedAt: Date.now() });
       } else {
         delete mapping[agent.id]; await fleetTabs.write(mapping);
-        await reportNativeAgentBrowser({ slotId: agent.id, profileId: 'gam-default', browserState: 'absent', observedAt: Date.now() });
+        await reportNativeAgentBrowser({ slotId: agent.id, profileId: slotProfileId, browserState: 'absent', observedAt: Date.now() });
       }
       } catch (error) {
         await reportIncident('fleet-action-failed', action.slotId, { kind: action.kind, error: error instanceof Error ? error.message : String(error) });
