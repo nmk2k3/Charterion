@@ -33,9 +33,14 @@ export {
   reportNativeIncident,
   previewNativeOrganizationWebPatch,
   applyNativeOrganizationWebPatch,
+  previewNativeOrganizationWebReview,
+  decideNativeOrganizationWebReview,
 } from './nativeControlPersistent';
 export type {
   NativeOrganizationWebPatchPreview,
   NativeOrganizationWebPatchInput,
   NativeOrganizationWebPatchResult,
+  NativeOrganizationReviewPreview,
+  NativeOrganizationReviewDecisionInput,
+  NativeOrganizationReviewDecisionResult,
 } from './nativeControlPersistent';
