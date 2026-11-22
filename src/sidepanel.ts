@@ -574,11 +574,17 @@ async function runReadyTasks(): Promise<void> {
     const response = await request<{ results: TaskDispatchResult[] }>({ type: 'manager:run-ready-tasks' });
     const failed = response.results.filter((result) => !result.ok);
     const sent = response.results.length - failed.length;
+    const failures = failed.map((result) =>
+      `${taskName(result.taskId)}: ${result.error || 'No dispatch error detail was provided'}`,
+    );
     setStatus(
       taskStatus,
       response.results.length === 0
         ? 'No tasks are ready.'
-        : `${sent} task(s) dispatched · ${failed.length} not dispatched.`,
+        : [
+          `${sent} task(s) dispatched · ${failed.length} not dispatched.`,
+          ...failures,
+        ].join(' | '),
       failed.length > 0,
     );
     await refresh();
