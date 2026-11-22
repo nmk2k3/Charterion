@@ -171,11 +171,14 @@ export class OrganizationWebReviewAuthority {
         !task.attemptIds || !(task.attemptIds as string[]).includes(input.attemptId)) {
       throw new Error('Web review response lacks a matching durable reply-observed attempt');
     }
-    if (input.decision === 'approve' && last?.type !== 'ORG_WEB_REVIEW_STARTED' && !this.preview({
-      projectId: input.projectId, taskId: input.taskId,
-      slotId: input.slotId, tabId: input.tabId,
-    }).diffComplete) {
-      throw new Error('AI approval refuses truncated Git diffs');
+    if (input.decision === 'approve' && last?.type !== 'ORG_WEB_REVIEW_STARTED') {
+      const observed = this.preview({
+        projectId: input.projectId, taskId: input.taskId,
+        slotId: input.slotId, tabId: input.tabId,
+      });
+      if (!observed.diffComplete || !observed.diff.trim()) {
+        throw new Error('AI approval requires a complete, substantive Git diff');
+      }
     }
 
     if (last?.type === 'ORG_WEB_REVIEW_STARTED') {
