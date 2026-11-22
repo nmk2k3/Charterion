@@ -182,8 +182,6 @@ export class OrganizationWebPatchAuthority {
     if (process.env.GAM_ALLOW_WEB_PATCHES !== '1') {
       throw new Error('Web patching is disabled; set GAM_ALLOW_WEB_PATCHES=1 only for trusted projects');
     }
-    const { task, workspace, work, agent, slot } =
-      this.context(input.projectId, input.taskId, input.slotId, input.tabId);
     const attemptId = requireText(input.attemptId, 'attemptId', 128);
     const summary = requireText(input.summary, 'summary', 1000);
     const requestHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
@@ -202,6 +200,11 @@ export class OrganizationWebPatchAuthority {
       return result;
     }
     if (previous) throw new Error('Web patch attempt was interrupted; manual recovery required');
+
+    // Read-only idempotent replay remains valid after the original workspace
+    // was released as part of the successful WorkOutcome completion.
+    const { task, workspace, work, agent, slot } =
+      this.context(input.projectId, input.taskId, input.slotId, input.tabId);
 
     const row = this.plane.database.db.prepare(
       'SELECT document_json FROM manager_attempts WHERE id=?',
