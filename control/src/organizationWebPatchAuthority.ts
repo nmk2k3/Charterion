@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { createHash } from 'node:crypto';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { ControlPlane } from './controlPlane';
 import { OrganizationTestRunner } from './organizationTestRunner';
@@ -37,6 +38,7 @@ export interface WebPatchResult {
   commitSha: string;
   claimId?: string;
   testResultId?: string;
+  requestHash?: string;
 }
 
 function requireText(value: string, name: string, max: number): string {
@@ -70,8 +72,14 @@ function fileInside(worktree: string, relativePath: string): string {
   let segment = root;
   for (const part of relativePath.split('/')) {
     segment = join(segment, part);
-    if (existsSync(segment) && lstatSync(segment).isSymbolicLink()) {
-      throw new Error('Web patch refuses symbolic-link targets');
+    // existsSync follows links and returns false for a dangling link.
+    // lstat is mandatory to reject both live and dangling symlinks.
+    try {
+      if (lstatSync(segment).isSymbolicLink()) {
+        throw new Error('Web patch refuses symbolic-link targets');
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
   return target;
@@ -91,6 +99,7 @@ type AttemptDocument = {
   tabId?: number;
   state?: string;
   conversationKey?: string;
+  contentEpoch?: string;
 };
 
 export class OrganizationWebPatchAuthority {
@@ -176,6 +185,7 @@ export class OrganizationWebPatchAuthority {
       this.context(input.projectId, input.taskId, input.slotId, input.tabId);
     const attemptId = requireText(input.attemptId, 'attemptId', 128);
     const summary = requireText(input.summary, 'summary', 1000);
+    const requestHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     const sourceSha = requireText(input.baseSha, 'baseSha', 64);
     const previous = this.plane.database.db.prepare(`
       SELECT type,payload_json FROM events
@@ -185,7 +195,9 @@ export class OrganizationWebPatchAuthority {
       { type: string; payload_json: string } | undefined;
     if (previous?.type === 'ORG_WEB_PATCH_APPLIED') {
       const result = JSON.parse(previous.payload_json) as WebPatchResult;
-      if (result.taskId !== input.taskId) throw new Error('Web patch replay identity mismatch');
+      if (result.taskId !== input.taskId || result.requestHash !== requestHash) {
+        throw new Error('Web patch replay identity or payload mismatch');
+      }
       return result;
     }
     if (previous) throw new Error('Web patch attempt was interrupted; manual recovery required');
@@ -198,7 +210,8 @@ export class OrganizationWebPatchAuthority {
         attempt.taskId !== input.taskId || attempt.tabId !== input.tabId ||
         attempt.state !== 'reply-observed' || !task.attemptIds ||
         !(task.attemptIds as string[]).includes(attemptId) ||
-        (slot.conversationKey && attempt.conversationKey !== slot.conversationKey)) {
+        !attempt.contentEpoch ||
+        (slot.browserContentEpoch && attempt.contentEpoch !== slot.browserContentEpoch)) {
       throw new Error('Web patch is not bound to a replied, durable task attempt');
     }
 
@@ -236,7 +249,7 @@ export class OrganizationWebPatchAuthority {
       this.plane.database.db.prepare(
         'INSERT INTO events(project_id,type,subject,payload_json,created_at) VALUES(?,?,?,?,?)',
       ).run(input.projectId, 'ORG_WEB_PATCH_STARTED', attemptId,
-        JSON.stringify({ taskId: input.taskId, slotId: input.slotId, sourceSha, files: [...names] }), now);
+        JSON.stringify({ taskId: input.taskId, slotId: input.slotId, sourceSha, requestHash, files: [...names] }), now);
     });
 
     // SQLite event is written before filesystem effects. An interruption is
@@ -280,6 +293,7 @@ export class OrganizationWebPatchAuthority {
     } else {
       result = this.completeVerified(input, work.id, agent.id, workspace, commitSha, summary, now);
     }
+    result.requestHash = requestHash;
     this.plane.database.db.prepare(
       'INSERT INTO events(project_id,type,subject,payload_json,created_at) VALUES(?,?,?,?,?)',
     ).run(input.projectId, 'ORG_WEB_PATCH_APPLIED', attemptId, JSON.stringify(result), now);
